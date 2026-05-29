@@ -14,12 +14,12 @@ channels — plus a non-interactive `run-once` command for cron.
 The dashboard is a live status grid (one row per validator, one column per watcher)
 with the cron log streaming underneath:
 
-![Dashboard: per-validator status grid with a live cron-log pane](https://raw.githubusercontent.com/michaelschem/solscope-validator-watcher/main/docs/img/main-page.png)
+![Dashboard: per-validator status grid with a live cron-log pane](docs/img/main-page.png)
 
 Editing a validator groups its settings into clear sections — identity, watchers and
 their cooldowns, and notification channels:
 
-![Validator editor: grouped settings cards for identity, watchers, and channels](https://raw.githubusercontent.com/michaelschem/solscope-validator-watcher/main/docs/img/config-page.png)
+![Validator editor: grouped settings cards for identity, watchers, and channels](docs/img/config-page.png)
 
 ## Watchers
 
