@@ -34,22 +34,37 @@ Configure any combination under `notifications`:
 
 ## Install
 
-From PyPI:
+Install into a virtual environment. This is the recommended approach everywhere,
+and on modern Debian/Ubuntu (PEP 668 "externally-managed-environment") it is
+required — a system-wide `pip install` will be refused.
 
 ```bash
-python3 -m pip install solscope-validator-watcher
+# Create a venv (one-time). Anywhere is fine; this keeps it with the config.
+python3 -m venv ~/.solscope-validator-watcher/venv
+
+# Activate it, then install
+source ~/.solscope-validator-watcher/venv/bin/activate
+pip install solscope-validator-watcher
 ```
 
-From source (this directory):
+> On Ubuntu you may first need `sudo apt install python3-venv` (and `python3-pip`).
+
+After activating the venv, the `solscope-validator-watcher` command is on your
+`PATH`. You don't need to keep the venv activated for cron — see
+[Run (cron)](#run-cron), which records the venv's Python automatically.
+
+If you prefer not to manage a venv yourself, [`pipx`](https://pipx.pypa.io) does
+it for you:
 
 ```bash
-python3 -m pip install .
+pipx install solscope-validator-watcher
 ```
 
-Editable install for development:
+### From source (for development)
 
 ```bash
-python3 -m pip install -e .
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
 ```
 
 ## Configure (the TUI)
@@ -88,14 +103,25 @@ public endpoint.
 ## Run (cron)
 
 The watchers run via the non-interactive `run-once` command, which the TUI's "install
-cron" action wires up for you. To do it manually:
+cron" action wires up for you. To do it manually (from inside the activated venv):
 
 ```bash
 solscope-validator-watcher run-once          # run all validators once (used by cron)
 solscope-validator-watcher install-cron      # install the one-minute cron job
 ```
 
-`install-cron` accepts `--config`, `--python-bin`, and `--log-file`.
+cron does **not** inherit your activated virtualenv, so `install-cron` bakes the
+**absolute path of the current Python interpreter** into the cron line. As long as
+you run `install-cron` (or press `c` in the TUI) from inside the venv where you
+installed the package, the cron job will use that same venv automatically — no
+activation needed at run time. The installed line looks like:
+
+```
+* * * * * /home/solana/.solscope-validator-watcher/venv/bin/python -m validator_watcher run-once --config "..." >> "..." 2>&1
+```
+
+`install-cron` accepts `--config`, `--python-bin` (override the interpreter), and
+`--log-file`.
 
 ## Recommended: high-availability setup
 

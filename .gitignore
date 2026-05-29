@@ -11,3 +11,6 @@ build/
 
 # Local runtime config / state
 *.state.json
+
+# Secrets / credentials
+.env

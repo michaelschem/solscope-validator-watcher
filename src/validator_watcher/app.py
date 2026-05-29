@@ -3,6 +3,7 @@ import json
 import os
 import smtplib
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -516,8 +517,9 @@ def main(argv: list[str] | None = None) -> int:
     cron_parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     cron_parser.add_argument(
         "--python-bin",
-        default=os.environ.get("PYTHON_BIN", "python3"),
-        help="Python binary used by cron",
+        default=os.environ.get("PYTHON_BIN") or sys.executable,
+        help="Python binary used by cron (defaults to the current interpreter, "
+        "e.g. the active virtualenv)",
     )
     cron_parser.add_argument(
         "--log-file",

@@ -10,6 +10,7 @@ The non-interactive ``run-once`` command (used by cron) lives in ``app.py``.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -449,7 +450,7 @@ class MainScreen(Screen):
         try:
             cmd = install_cron(
                 self.app.config_path,
-                os.environ.get("PYTHON_BIN", "python3"),
+                os.environ.get("PYTHON_BIN") or sys.executable,
                 Path(DEFAULT_LOG_PATH),
             )
         except Exception as exc:  # noqa: BLE001
