@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solscope-validator-watcher"
-version = "0.3.2"
+version = "0.3.3"
 description = "Standalone cron-based monitoring and alerting for Solana validators"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,6 +39,9 @@ dependencies = [
     "textual>=0.80",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
 [project.urls]
 Homepage = "https://github.com/michaelschem/solscope-validator-watcher"
 Repository = "https://github.com/michaelschem/solscope-validator-watcher"
@@ -49,3 +52,7 @@ solscope-validator-watcher = "validator_watcher.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
