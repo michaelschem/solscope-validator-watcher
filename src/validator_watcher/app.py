@@ -76,7 +76,7 @@ def default_watchers() -> dict[str, Any]:
         },
         "delinquent": {
             "enabled": True,
-            "cooldown_minutes": 10,
+            "cooldown_minutes": 1,
         },
     }
 
