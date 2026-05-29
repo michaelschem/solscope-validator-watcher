@@ -13,7 +13,7 @@ channels — plus a non-interactive `run-once` command for cron.
 
 | Watcher | What it checks |
 |---|---|
-| `sfdp_version` | Your node's version against the SFDP **required** minimum (`agave_min_version` from `api.solana.org`). |
+| `sfdp_version` | Your node's version against the SFDP **required** minimum from `api.solana.org`. Detects whether the node runs Agave or **Firedancer** (by its version line) and compares against that client's minimum (`agave_min_version` or `firedancer_min_version`). |
 | `software_outdated` | Your node's version against the **latest stable** Agave release on GitHub (`anza-xyz/agave`) within your node's current major version line (e.g. a `v3.1.x` node is compared to the newest `v3.x.y`). |
 | `delinquent` | Whether your vote account is reported delinquent via `getVoteAccounts`. |
 

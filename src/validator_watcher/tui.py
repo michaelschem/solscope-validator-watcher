@@ -35,6 +35,9 @@ from textual.widgets import (
 from .app import (
     DEFAULT_LOG_PATH,
     WATCHER_LABELS,
+    _detect_client,
+    _get_cluster_node_info,
+    _parse_version,
     _read_json,
     _send_notifications,
     _write_json,
@@ -326,14 +329,27 @@ class ValidatorScreen(Screen):
         cluster = self.query_one("#cluster", Select).value
         rpc = self.query_one("#rpc_url", Input).value.strip()
         url = rpc or default_rpc_url(cluster)
+        identity = self.query_one("#identity", Input).value.strip()
         status = self.query_one("#rpc-status", Static)
         status.update("Testing ...")
-        self._run_rpc_test(url, status)
+        self._run_rpc_test(url, identity, status)
 
     @work(thread=True)
-    def _run_rpc_test(self, url: str, status: Static) -> None:
+    def _run_rpc_test(self, url: str, identity: str, status: Static) -> None:
         ok, detail = test_rpc(url)
         marker = "[green]\u2713[/green]" if ok else "[red]\u2717[/red]"
+        # When an identity is set, also report the detected client + version.
+        if ok and identity:
+            try:
+                version, client_id = _get_cluster_node_info(url, identity)
+                if version is None:
+                    detail += " | node not found in getClusterNodes"
+                else:
+                    client = _detect_client(client_id, _parse_version(version))
+                    label = client_id or client.capitalize()
+                    detail += f" | {label} {version}"
+            except Exception as exc:  # noqa: BLE001
+                detail += f" | client lookup failed: {exc}"
         self.app.call_from_thread(status.update, f"{marker} {detail}")
 
     @on(Button.Pressed, "#test-notif")

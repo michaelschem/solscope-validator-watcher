@@ -2,6 +2,8 @@ name: Publish to PyPI
 
 # Publishes on a GitHub Release, or manually via the "Run workflow" button.
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
   workflow_dispatch:
@@ -61,3 +63,7 @@ jobs:
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # On a push where the version wasn't bumped, the version already
+          # exists on PyPI; skip it instead of failing the job.
+          skip-existing: true

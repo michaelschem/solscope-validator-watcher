@@ -160,12 +160,35 @@ def test_rpc(rpc_url: str) -> tuple[bool, str]:
     return True, f"Connected (solana-core {version})"
 
 
-def _get_cluster_node_version(rpc_url: str, identity_pubkey: str) -> str | None:
+def _get_cluster_node_info(
+    rpc_url: str, identity_pubkey: str
+) -> tuple[str | None, str | None]:
+    """Return ``(version, client_id)`` for the node, or ``(None, None)``.
+
+    ``getClusterNodes`` exposes ``clientId`` (e.g. ``Agave``, ``JitoLabs``,
+    ``Frankendancer``), though some nodes report ``Unknown(N)`` when the queried
+    RPC doesn't recognize the client's numeric id.
+    """
     nodes = _rpc_call(rpc_url, "getClusterNodes")
     for node in nodes:
         if node.get("pubkey") == identity_pubkey:
-            return node.get("version")
-    return None
+            return node.get("version"), node.get("clientId")
+    return None, None
+
+
+def _detect_client(client_id: str | None, version_parts: tuple[int, int, int]) -> str:
+    """Classify a node as ``"firedancer"`` or ``"agave"``.
+
+    Prefers the explicit ``clientId`` and falls back to the version line
+    (Firedancer uses the ``0.x`` range) when ``clientId`` is missing or
+    unrecognized (e.g. ``Unknown(11)``).
+    """
+    name = (client_id or "").lower()
+    if "firedancer" in name or "frankendancer" in name:
+        return "firedancer"
+    if "agave" in name or "jito" in name or "paladin" in name:
+        return "agave"
+    return "firedancer" if version_parts[0] == 0 else "agave"
 
 
 def _is_validator_delinquent(rpc_url: str, vote_pubkey: str) -> bool:
@@ -174,17 +197,20 @@ def _is_validator_delinquent(rpc_url: str, vote_pubkey: str) -> bool:
     return any(item.get("votePubkey") == vote_pubkey for item in delinquent)
 
 
-def _get_required_jito_tag(api_url: str) -> str:
+def _get_sfdp_min_versions(api_url: str) -> tuple[str | None, str | None]:
+    """Return ``(agave_min_version, firedancer_min_version)`` from the SFDP API.
+
+    The Solana Foundation publishes a separate required minimum for each client,
+    so callers can validate a node against the line it actually runs.
+    """
     resp = requests.get(api_url, timeout=15)
     resp.raise_for_status()
     payload = resp.json()
     data = payload.get("data", [])
     if not data:
         raise RuntimeError("No version data from Solana API")
-    required_version = data[-1].get("agave_min_version")
-    if not required_version:
-        raise RuntimeError("No agave_min_version from Solana API")
-    return f"v{required_version}-jito"
+    latest = data[-1]
+    return latest.get("agave_min_version"), latest.get("firedancer_min_version")
 
 
 def _get_latest_agave_version(api_url: str, major: int | None = None) -> str | None:
@@ -328,10 +354,10 @@ def _run_sfdp_version_watcher(
     cluster = validator["cluster"]
     identity = validator["identity_pubkey"]
     rpc_url = resolve_rpc_url(validator)
-    required_tag = _get_required_jito_tag(
+    agave_min, firedancer_min = _get_sfdp_min_versions(
         watcher_cfg.get("api_url", SFDP_REQUIRED_VERSIONS_API)
     )
-    validator_version = _get_cluster_node_version(rpc_url, identity)
+    validator_version, client_id = _get_cluster_node_info(rpc_url, identity)
     if validator_version is None:
         return WatchResult(
             True,
@@ -339,19 +365,37 @@ def _run_sfdp_version_watcher(
             f"Validator {identity} is not visible in getClusterNodes for {cluster}.",
         )
 
-    required_parts = _parse_version(required_tag)
     validator_parts = _parse_version(validator_version)
+    client = _detect_client(client_id, validator_parts)
+    client_display = client_id or client.capitalize()
 
-    outdated = validator_parts < required_parts
-    same_semver_non_jito = (
-        validator_parts == required_parts and "-jito" not in validator_version
-    )
-    if not (outdated or same_semver_non_jito):
-        return WatchResult(False, watcher_name)
+    # Route to the detected client's requirement. Agave and Firedancer use
+    # different version ranges, so they must not be compared against each other.
+    if client == "firedancer":
+        # Validate against the Firedancer minimum (no jito tag).
+        if not firedancer_min:
+            # No Firedancer minimum published; nothing to enforce.
+            return WatchResult(False, watcher_name)
+        required_label = firedancer_min
+        if validator_parts >= _parse_version(firedancer_min):
+            return WatchResult(False, watcher_name)
+    else:
+        # Validate against the Agave minimum, requiring the -jito build.
+        if not agave_min:
+            return WatchResult(False, watcher_name)
+        required_label = f"v{agave_min}-jito"
+        required_parts = _parse_version(required_label)
+        outdated = validator_parts < required_parts
+        same_semver_non_jito = (
+            validator_parts == required_parts and "-jito" not in validator_version
+        )
+        if not (outdated or same_semver_non_jito):
+            return WatchResult(False, watcher_name)
 
     message = (
         f"Validator {identity} version check failed. "
-        f"Current: {validator_version}. Required: {required_tag}."
+        f"Current: {validator_version} ({client_display}). "
+        f"Required: {required_label}."
     )
     return WatchResult(True, watcher_name, message)
 
@@ -400,7 +444,7 @@ def _run_software_outdated_watcher(
     identity = validator["identity_pubkey"]
     rpc_url = resolve_rpc_url(validator)
 
-    validator_version = _get_cluster_node_version(rpc_url, identity)
+    validator_version, client_id = _get_cluster_node_info(rpc_url, identity)
     if validator_version is None:
         return WatchResult(
             True,
@@ -409,6 +453,10 @@ def _run_software_outdated_watcher(
         )
 
     validator_parts = _parse_version(validator_version)
+    # This watcher tracks Agave GitHub releases; it doesn't apply to Firedancer.
+    if _detect_client(client_id, validator_parts) == "firedancer":
+        return WatchResult(False, watcher_name)
+
     latest_version = _get_latest_agave_version(
         watcher_cfg.get("api_url", AGAVE_RELEASES_API),
         major=validator_parts[0],
