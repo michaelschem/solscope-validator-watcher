@@ -32,6 +32,18 @@ Configure any combination under `notifications`:
 - `twilio` — Twilio SMS. You must supply your **own** Twilio sending source (`account_sid`, `auth_token`, and a verified `from_phone`) plus the destination `to_phones`. Unlike the hosted SolScope service, there is no shared sender — SMS only works if you provide your own Twilio account.
 - `smtp_email` — SMTP email (`host`, `port`, `username`, `password`, `from_email`, `to_emails`, `use_tls`)
 
+### Recovery notifications
+
+When a watcher's condition clears (e.g. your node comes back to the required
+version, or stops being delinquent), every configured channel automatically
+receives a `RESOLVED: ...` message. PagerDuty goes further: the original
+incident is **auto-resolved** via a stable dedup key (`<identity>:<watcher>`),
+so you don't have to close it by hand. This is always on — no extra config.
+
+Cooldowns still apply while an alert persists (so you aren't spammed), but a
+recovery notification is sent exactly once on the transition back to healthy,
+and the cooldown resets so a re-occurrence alerts you immediately.
+
 ## Install
 
 Install into a virtual environment. This is the recommended approach everywhere,
@@ -87,8 +99,11 @@ In the dashboard you can:
 - In the editor: set cluster (or a custom RPC URL), identity/vote keys, toggle each
   watcher and its cooldown, and fill in notification channels.
   - **`Ctrl+S`** save · **`Ctrl+T`** send test notifications · **`Ctrl+D`** delete · **`Esc`** cancel
-  - **Test RPC** button verifies connectivity to the endpoint before you save.
-- Press **`c`** to install the one-minute cron job that runs the watchers.
+  - **Test RPC** button verifies connectivity (and reports the detected client, e.g.
+    Agave/Firedancer, and version) before you save.
+- **Saving a validator automatically installs/refreshes the one-minute cron job**, so
+  monitoring is active without an extra step. Press **`c`** to (re)install it manually
+  — handy if you move the virtualenv or the cron update was skipped.
 - Press **`q`** to quit.
 
 Prefer to edit by hand? Copy [`config.example.json`](./config.example.json) and edit it.

@@ -32,6 +32,7 @@ from textual.widgets import (
     Switch,
 )
 
+from . import __version__
 from .app import (
     DEFAULT_LOG_PATH,
     WATCHER_LABELS,
@@ -444,10 +445,12 @@ class MainScreen(Screen):
             action, payload = result
             if action == "save":
                 self.app.config["validators"][index] = normalize_validator(payload)
+                self.app.persist()
+                self._saved_with_cron("Saved.")
             elif action == "delete":
                 del self.app.config["validators"][index]
-            self.app.persist()
-            self.app.notify("Saved.")
+                self.app.persist()
+                self.app.notify("Deleted.")
             self._refresh_list()
 
         self.app.push_screen(ValidatorScreen(validator, is_new=False), _after_edit)
@@ -459,8 +462,18 @@ class MainScreen(Screen):
         if action == "save":
             self.app.config["validators"].append(normalize_validator(payload))
             self.app.persist()
-            self.app.notify("Validator added.")
+            self._saved_with_cron("Validator added.")
             self._refresh_list()
+
+    def _saved_with_cron(self, saved_message: str) -> None:
+        """Persisted already; ensure the cron job is installed and notify."""
+        if self.app.ensure_cron():
+            self.app.notify(f"{saved_message} Monitoring cron is active.")
+        else:
+            self.app.notify(
+                f"{saved_message} (Cron not updated \u2014 press 'c' to retry.)",
+                severity="warning",
+            )
 
     def action_install_cron(self) -> None:
         try:
@@ -480,6 +493,7 @@ class WatcherTUI(App):
     """Top-level Textual application."""
 
     TITLE = "SolScope Validator Watcher"
+    SUB_TITLE = f"v{__version__}"
     CSS = """
     .intro { padding: 1 2; color: $text-muted; }
     .section { padding: 1 0 0 0; color: $accent; text-style: bold; }
@@ -515,6 +529,24 @@ class WatcherTUI(App):
         elif self.config.get("state_file"):
             payload["state_file"] = self.config["state_file"]
         _write_json(self.config_path, payload)
+
+    def ensure_cron(self) -> bool:
+        """Install/refresh the one-minute cron job (idempotent).
+
+        Called after saving a validator so monitoring is active without the user
+        having to remember to install the cron separately. Warns (but doesn't
+        block the save) if the crontab can't be updated.
+        """
+        try:
+            install_cron(
+                self.config_path,
+                os.environ.get("PYTHON_BIN") or sys.executable,
+                Path(DEFAULT_LOG_PATH),
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"Cron update failed: {exc}", severity="warning")
+            return False
 
 
 def run(config_path: Path) -> int:

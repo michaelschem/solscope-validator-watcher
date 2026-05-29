@@ -253,7 +253,19 @@ def _get_latest_agave_version(api_url: str, major: int | None = None) -> str | N
     return "{}.{}.{}".format(*max(versions))
 
 
-def _send_notifications(message: str, config: dict[str, Any]) -> None:
+def _send_notifications(
+    message: str,
+    config: dict[str, Any],
+    event: str = "trigger",
+    dedup_key: str | None = None,
+) -> None:
+    """Send a notification to every configured channel.
+
+    ``event`` is ``"trigger"`` for an alert or ``"resolve"`` for a recovery.
+    Most channels just deliver ``message`` (which already says "RESOLVED ..."
+    on recovery); PagerDuty uses a structured trigger/resolve action keyed by
+    ``dedup_key`` so an incident can be opened and later closed automatically.
+    """
     notifications = config.get("notifications", {})
 
     for webhook in notifications.get("slack_webhooks", []):
@@ -273,9 +285,13 @@ def _send_notifications(message: str, config: dict[str, Any]) -> None:
         requests.post(f"https://ntfy.sh/{topic}", data=message.encode("utf-8"), timeout=10)
 
     for integration_key in notifications.get("pagerduty_integration_keys", []):
-        requests.post(
-            "https://events.pagerduty.com/v2/enqueue",
-            json={
+        if event == "resolve":
+            body: dict[str, Any] = {
+                "event_action": "resolve",
+                "routing_key": integration_key,
+            }
+        else:
+            body = {
                 "event_action": "trigger",
                 "routing_key": integration_key,
                 "payload": {
@@ -284,7 +300,12 @@ def _send_notifications(message: str, config: dict[str, Any]) -> None:
                     "severity": "error",
                     "custom_details": {"info": message},
                 },
-            },
+            }
+        if dedup_key:
+            body["dedup_key"] = dedup_key
+        requests.post(
+            "https://events.pagerduty.com/v2/enqueue",
+            json=body,
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/vnd.pagerduty+json;version=2",
@@ -329,6 +350,16 @@ class WatchResult:
     fired: bool
     watcher_name: str
     message: str | None = None
+    # Which validator this result is for (filled in by run_once).
+    validator: str | None = None
+    # Outcome decided by run_once: "ok", "alert" (notified now), "active"
+    # (still firing, within cooldown), "resolved" (cleared), "disabled",
+    # or "error". Watchers themselves only set "ok"/"alert"/"disabled".
+    status: str = "ok"
+
+    def __post_init__(self) -> None:
+        if self.fired and self.status == "ok":
+            self.status = "alert"
 
 
 def _cooldown_elapsed(last_sent_iso: str | None, minutes: int) -> bool:
@@ -344,12 +375,7 @@ def _run_sfdp_version_watcher(
     watcher_name = "sfdp_version"
     watcher_cfg = validator["watchers"][watcher_name]
     if not watcher_cfg.get("enabled", False):
-        return WatchResult(False, watcher_name)
-
-    last_sent = state.get(watcher_name, {}).get("last_sent")
-    cooldown = int(watcher_cfg.get("cooldown_minutes", 360))
-    if not _cooldown_elapsed(last_sent, cooldown):
-        return WatchResult(False, watcher_name)
+        return WatchResult(False, watcher_name, status="disabled")
 
     cluster = validator["cluster"]
     identity = validator["identity_pubkey"]
@@ -369,28 +395,17 @@ def _run_sfdp_version_watcher(
     client = _detect_client(client_id, validator_parts)
     client_display = client_id or client.capitalize()
 
-    # Route to the detected client's requirement. Agave and Firedancer use
-    # different version ranges, so they must not be compared against each other.
-    if client == "firedancer":
-        # Validate against the Firedancer minimum (no jito tag).
-        if not firedancer_min:
-            # No Firedancer minimum published; nothing to enforce.
-            return WatchResult(False, watcher_name)
-        required_label = firedancer_min
-        if validator_parts >= _parse_version(firedancer_min):
-            return WatchResult(False, watcher_name)
-    else:
-        # Validate against the Agave minimum, requiring the -jito build.
-        if not agave_min:
-            return WatchResult(False, watcher_name)
-        required_label = f"v{agave_min}-jito"
-        required_parts = _parse_version(required_label)
-        outdated = validator_parts < required_parts
-        same_semver_non_jito = (
-            validator_parts == required_parts and "-jito" not in validator_version
-        )
-        if not (outdated or same_semver_non_jito):
-            return WatchResult(False, watcher_name)
+    # Compare against the detected client's required minimum. (Agave and
+    # Firedancer use different version ranges, so the client must be detected
+    # first to avoid comparing across them.) The check is version-only: Jito
+    # builds no longer encode "-jito" in their reported version, so a node at or
+    # above the minimum passes regardless of the specific Agave/Jito variant.
+    required_label = firedancer_min if client == "firedancer" else agave_min
+    if not required_label:
+        # No minimum published for this client; nothing to enforce.
+        return WatchResult(False, watcher_name)
+    if validator_parts >= _parse_version(required_label):
+        return WatchResult(False, watcher_name)
 
     message = (
         f"Validator {identity} version check failed. "
@@ -406,12 +421,7 @@ def _run_delinquent_watcher(
     watcher_name = "delinquent"
     watcher_cfg = validator["watchers"][watcher_name]
     if not watcher_cfg.get("enabled", False):
-        return WatchResult(False, watcher_name)
-
-    last_sent = state.get(watcher_name, {}).get("last_sent")
-    cooldown = int(watcher_cfg.get("cooldown_minutes", 10))
-    if not _cooldown_elapsed(last_sent, cooldown):
-        return WatchResult(False, watcher_name)
+        return WatchResult(False, watcher_name, status="disabled")
 
     cluster = validator["cluster"]
     vote_pubkey = validator["vote_pubkey"]
@@ -433,12 +443,7 @@ def _run_software_outdated_watcher(
     watcher_name = "software_outdated"
     watcher_cfg = validator["watchers"].get(watcher_name, {})
     if not watcher_cfg.get("enabled", False):
-        return WatchResult(False, watcher_name)
-
-    last_sent = state.get(watcher_name, {}).get("last_sent")
-    cooldown = int(watcher_cfg.get("cooldown_minutes", 360))
-    if not _cooldown_elapsed(last_sent, cooldown):
-        return WatchResult(False, watcher_name)
+        return WatchResult(False, watcher_name, status="disabled")
 
     cluster = validator["cluster"]
     identity = validator["identity_pubkey"]
@@ -491,6 +496,13 @@ WATCHER_LABELS = {
 }
 
 
+def _resolve_message(validator: dict[str, Any], watcher_name: str) -> str:
+    """Recovery message sent when a previously-firing watcher clears."""
+    name = validator.get("name") or validator.get("identity_pubkey") or "validator"
+    label = WATCHER_LABELS.get(watcher_name, watcher_name)
+    return f"RESOLVED: {label} check for validator {name} is back to normal."
+
+
 def run_once(config_path: Path) -> list[WatchResult]:
     raw = _read_json(config_path, {})
     if not raw:
@@ -506,28 +518,71 @@ def run_once(config_path: Path) -> list[WatchResult]:
     results: list[WatchResult] = []
     changed = False
     for validator in config["validators"]:
-        vkey = validator.get("identity_pubkey") or validator.get("name") or "validator"
-        validator_state = state.setdefault(vkey, {})
+        vkey = validator.get("name") or validator.get("identity_pubkey") or "validator"
+        state_key = validator.get("identity_pubkey") or validator.get("name") or "validator"
+        validator_state = state.setdefault(state_key, {})
         for watcher_name, runner in WATCHER_RUNNERS.items():
             try:
                 result = runner(validator, validator_state)
             except Exception as exc:  # noqa: BLE001 - keep other watchers running
                 # A single flaky check (RPC/API hiccup) must not take down the
                 # whole run, or cron would re-fire the same traceback every
-                # minute. Log it and move on.
+                # minute. Log it and move on (don't touch active state, so a
+                # transient failure can't masquerade as a recovery).
                 print(
                     f"[{vkey}] watcher '{watcher_name}' failed: {exc}",
                     file=sys.stderr,
                 )
-                results.append(WatchResult(False, watcher_name))
+                results.append(
+                    WatchResult(False, watcher_name, validator=vkey, status="error")
+                )
                 continue
+
+            result.validator = vkey
             results.append(result)
-            if result.fired and result.message:
-                _send_notifications(result.message, validator)
-                validator_state.setdefault(watcher_name, {})[
-                    "last_sent"
-                ] = _utc_now().isoformat()
+            if result.status == "disabled":
+                continue
+
+            wstate = validator_state.setdefault(watcher_name, {})
+            prev_active = bool(wstate.get("active", False))
+            dedup_key = f"{state_key}:{watcher_name}"
+            cooldown = int(
+                validator["watchers"].get(watcher_name, {}).get("cooldown_minutes", 360)
+            )
+
+            if result.fired:
+                # Notify on the first occurrence, or once per cooldown while it
+                # persists. Otherwise it's an ongoing alert in its quiet window.
+                if (not prev_active) or _cooldown_elapsed(
+                    wstate.get("last_sent"), cooldown
+                ):
+                    if result.message:
+                        _send_notifications(
+                            result.message,
+                            validator,
+                            event="trigger",
+                            dedup_key=dedup_key,
+                        )
+                    wstate["last_sent"] = _utc_now().isoformat()
+                    result.status = "alert"
+                else:
+                    result.status = "active"
+                wstate["active"] = True
                 changed = True
+            else:
+                # Condition is healthy. If it was firing, send a recovery
+                # notification and reset so a re-occurrence alerts immediately.
+                if prev_active:
+                    _send_notifications(
+                        _resolve_message(validator, watcher_name),
+                        validator,
+                        event="resolve",
+                        dedup_key=dedup_key,
+                    )
+                    result.status = "resolved"
+                    wstate["active"] = False
+                    wstate.pop("last_sent", None)
+                    changed = True
 
     if changed:
         _write_json(state_path, state)
@@ -562,6 +617,40 @@ def install_cron(config_path: Path, python_bin: str, log_path: Path) -> str:
     updated = "\n".join(lines) + "\n"
     subprocess.run(["crontab", "-"], input=updated, text=True, check=True)
     return cron_cmd
+
+
+def _print_run_summary(results: list[WatchResult]) -> None:
+    """Print a per-watcher summary for a ``run-once`` invocation (cron log)."""
+    timestamp = _utc_now().isoformat(timespec="seconds")
+    alerted = sum(1 for r in results if r.status == "alert")
+    resolved = sum(1 for r in results if r.status == "resolved")
+    header = (
+        f"{timestamp} | {alerted} alert(s) sent, {resolved} resolved "
+        f"of {len(results)} checks"
+    )
+    print(header)
+
+    # Group the per-watcher status lines by validator, preserving order.
+    by_validator: dict[str, list[WatchResult]] = {}
+    for r in results:
+        by_validator.setdefault(r.validator or "validator", []).append(r)
+
+    markers = {
+        "alert": "ALERT",
+        "active": "still firing",
+        "resolved": "RESOLVED",
+        "ok": "ok",
+        "disabled": "disabled",
+        "error": "error",
+    }
+    for validator, checks in by_validator.items():
+        print(f"  {validator}")
+        for r in checks:
+            label = markers.get(r.status, r.status)
+            line = f"    - {r.watcher_name}: {label}"
+            if r.message:
+                line += f" — {r.message}"
+            print(line)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -609,11 +698,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run-once":
         results = run_once(config_path)
-        fired = [r for r in results if r.fired and r.message]
-        for result in fired:
-            print(result.message)
-        if not fired:
-            print("No alerts fired.")
+        _print_run_summary(results)
         return 0
 
     if args.command == "install-cron":
