@@ -95,7 +95,9 @@ The dashboard is a **live status grid**: each row is a validator, each column is
 watcher, and every cell shows that check's current state — green `✓ ok`, red
 `✗ alarm`, dim `— off` (disabled), or yellow `! err` (the check itself failed).
 All checks run on startup so you get an immediate picture, and you can re-run them
-any time with **`r`**.
+any time with **`r`**. A **live log pane** at the bottom tails the cron log
+(`~/.solscope-validator-watcher/watcher.log`), so you can watch each scheduled run
+stream in as it happens.
 
 - **Enter** on a row opens the editor for that validator; **`a`** adds a new one.
 - In the editor: set cluster (or a custom RPC URL), identity/vote keys, toggle each

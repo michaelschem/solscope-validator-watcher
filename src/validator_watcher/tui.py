@@ -14,10 +14,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from rich.markup import escape
+
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -26,6 +28,7 @@ from textual.widgets import (
     Header,
     Input,
     Label,
+    RichLog,
     Select,
     Static,
     Switch,
@@ -164,84 +167,147 @@ class ValidatorScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         title = "Add validator" if self.is_new else "Edit validator"
+        v = self.validator
+        notifications = v.get("notifications", {})
         with FormScroll(id="form"):
-            yield Static(f"[b]{title}[/b]", classes="section")
+            yield Static(f"[b]{title}[/b]", classes="form-title")
 
-            yield Label("Name")
-            yield Input(value=self.validator.get("name", ""), id="name")
+            with Vertical(classes="card") as card:
+                card.border_title = "Validator"
+                with Horizontal(classes="two-col"):
+                    with Vertical(classes="col"):
+                        yield Label("Name", classes="field-label")
+                        yield Input(
+                            value=v.get("name", ""),
+                            id="name",
+                            placeholder="my-validator",
+                        )
+                    with Vertical(classes="col"):
+                        yield Label("Cluster", classes="field-label")
+                        yield Select(
+                            [(c, c) for c in _CLUSTERS],
+                            value=v.get("cluster", "mainnet-beta"),
+                            allow_blank=False,
+                            id="cluster",
+                        )
+                yield Label("Identity pubkey", classes="field-label")
+                yield Input(
+                    value=v.get("identity_pubkey", ""),
+                    id="identity",
+                    placeholder="base58 node identity",
+                )
+                yield Label("Vote pubkey", classes="field-label")
+                yield Input(
+                    value=v.get("vote_pubkey", ""),
+                    id="vote",
+                    placeholder="base58 vote account",
+                )
+                yield Label("Custom RPC URL", classes="field-label")
+                yield Input(
+                    value=v.get("rpc_url", ""),
+                    id="rpc_url",
+                    placeholder="blank = public endpoint for the cluster",
+                )
+                with Horizontal(classes="row"):
+                    yield Button("Test RPC", id="test-rpc", variant="primary")
+                    yield Static("", id="rpc-status", classes="status")
 
-            yield Label("Cluster")
-            yield Select(
-                [(c, c) for c in _CLUSTERS],
-                value=self.validator.get("cluster", "mainnet-beta"),
-                allow_blank=False,
-                id="cluster",
-            )
+            with Vertical(classes="card") as card:
+                card.border_title = "Watchers"
+                with Horizontal(classes="watch-head"):
+                    yield Static("On", classes="col-switch")
+                    yield Static("Check", classes="col-name")
+                    yield Static("Cooldown (min)", classes="col-cool")
+                for name, label in WATCHER_LABELS.items():
+                    wcfg = v["watchers"].get(name, {})
+                    with Horizontal(classes="watch-row"):
+                        yield Switch(
+                            value=bool(wcfg.get("enabled", True)),
+                            id=f"watch-{name}-enabled",
+                            classes="col-switch",
+                        )
+                        yield Label(label, classes="col-name")
+                        yield Input(
+                            value=str(wcfg.get("cooldown_minutes", 60)),
+                            id=f"watch-{name}-cooldown",
+                            type="integer",
+                            classes="col-cool",
+                        )
 
-            yield Label("Custom RPC URL (blank = public endpoint)")
-            yield Input(value=self.validator.get("rpc_url", ""), id="rpc_url")
-
-            yield Label("Identity pubkey")
-            yield Input(value=self.validator.get("identity_pubkey", ""), id="identity")
-
-            yield Label("Vote pubkey")
-            yield Input(value=self.validator.get("vote_pubkey", ""), id="vote")
-
-            with Horizontal(classes="row"):
-                yield Button("Test RPC", id="test-rpc", variant="primary")
-                yield Static("", id="rpc-status", classes="status")
-
-            yield Static("[b]Watchers[/b]", classes="section")
-            for name, label in WATCHER_LABELS.items():
-                wcfg = self.validator["watchers"].get(name, {})
-                with Horizontal(classes="watch-row"):
-                    yield Switch(
-                        value=bool(wcfg.get("enabled", True)),
-                        id=f"watch-{name}-enabled",
-                    )
-                    yield Label(f"{label}  ", classes="watch-label")
-                    yield Label("cooldown (min):", classes="cooldown-label")
+            with Vertical(classes="card") as card:
+                card.border_title = "Webhook & push channels"
+                yield Static(
+                    "Comma-separated lists; leave blank to skip a channel.",
+                    classes="card-hint",
+                )
+                for key, label in _LIST_CHANNELS:
+                    yield Label(label, classes="field-label")
                     yield Input(
-                        value=str(wcfg.get("cooldown_minutes", 60)),
-                        id=f"watch-{name}-cooldown",
-                        type="integer",
-                        classes="cooldown-input",
+                        value=_list_to_csv(notifications.get(key)),
+                        id=f"chan-{key}",
                     )
-
-            yield Static("[b]Notification channels[/b]", classes="section")
-            notifications = self.validator.get("notifications", {})
-            for key, label in _LIST_CHANNELS:
-                yield Label(f"{label} (comma-separated)")
-                yield Input(value=_list_to_csv(notifications.get(key)), id=f"chan-{key}")
 
             twilio = notifications.get("twilio") or {}
-            yield Static("[b]Twilio SMS[/b] (your own account)", classes="subsection")
-            yield Label("Account SID")
-            yield Input(value=twilio.get("account_sid", ""), id="twilio-sid")
-            yield Label("Auth token")
-            yield Input(value=twilio.get("auth_token", ""), password=True, id="twilio-token")
-            yield Label("From phone")
-            yield Input(value=twilio.get("from_phone", ""), id="twilio-from")
-            yield Label("To phones (comma-separated)")
-            yield Input(value=_list_to_csv(twilio.get("to_phones")), id="twilio-to")
+            with Vertical(classes="card") as card:
+                card.border_title = "Twilio SMS"
+                with Horizontal(classes="two-col"):
+                    with Vertical(classes="col"):
+                        yield Label("Account SID", classes="field-label")
+                        yield Input(value=twilio.get("account_sid", ""), id="twilio-sid")
+                    with Vertical(classes="col"):
+                        yield Label("Auth token", classes="field-label")
+                        yield Input(
+                            value=twilio.get("auth_token", ""),
+                            password=True,
+                            id="twilio-token",
+                        )
+                with Horizontal(classes="two-col"):
+                    with Vertical(classes="col"):
+                        yield Label("From phone", classes="field-label")
+                        yield Input(value=twilio.get("from_phone", ""), id="twilio-from")
+                    with Vertical(classes="col"):
+                        yield Label("To phones (comma-separated)", classes="field-label")
+                        yield Input(
+                            value=_list_to_csv(twilio.get("to_phones")),
+                            id="twilio-to",
+                        )
 
             smtp = notifications.get("smtp_email") or {}
-            yield Static("[b]SMTP email[/b]", classes="subsection")
-            yield Label("Host")
-            yield Input(value=smtp.get("host", ""), id="smtp-host")
-            yield Label("Port")
-            yield Input(value=str(smtp.get("port", 587)), id="smtp-port", type="integer")
-            yield Label("Username")
-            yield Input(value=smtp.get("username", ""), id="smtp-user")
-            yield Label("Password")
-            yield Input(value=smtp.get("password", ""), password=True, id="smtp-pass")
-            yield Label("From email")
-            yield Input(value=smtp.get("from_email", ""), id="smtp-from")
-            yield Label("To emails (comma-separated)")
-            yield Input(value=_list_to_csv(smtp.get("to_emails")), id="smtp-to")
-            with Horizontal(classes="watch-row"):
-                yield Switch(value=bool(smtp.get("use_tls", True)), id="smtp-tls")
-                yield Label("Use STARTTLS", classes="watch-label")
+            with Vertical(classes="card") as card:
+                card.border_title = "SMTP email"
+                with Horizontal(classes="two-col"):
+                    with Vertical(classes="col"):
+                        yield Label("Host", classes="field-label")
+                        yield Input(value=smtp.get("host", ""), id="smtp-host")
+                    with Vertical(classes="col col-narrow"):
+                        yield Label("Port", classes="field-label")
+                        yield Input(
+                            value=str(smtp.get("port", 587)),
+                            id="smtp-port",
+                            type="integer",
+                        )
+                with Horizontal(classes="two-col"):
+                    with Vertical(classes="col"):
+                        yield Label("Username", classes="field-label")
+                        yield Input(value=smtp.get("username", ""), id="smtp-user")
+                    with Vertical(classes="col"):
+                        yield Label("Password", classes="field-label")
+                        yield Input(
+                            value=smtp.get("password", ""),
+                            password=True,
+                            id="smtp-pass",
+                        )
+                yield Label("From email", classes="field-label")
+                yield Input(value=smtp.get("from_email", ""), id="smtp-from")
+                yield Label("To emails (comma-separated)", classes="field-label")
+                yield Input(value=_list_to_csv(smtp.get("to_emails")), id="smtp-to")
+                with Horizontal(classes="watch-row"):
+                    yield Switch(
+                        value=bool(smtp.get("use_tls", True)),
+                        id="smtp-tls",
+                        classes="col-switch",
+                    )
+                    yield Label("Use STARTTLS", classes="col-name")
 
             with Horizontal(classes="row buttons"):
                 yield Button("Save", id="save", variant="success")
@@ -394,7 +460,7 @@ class MainScreen(Screen):
         ("a", "add", "Add validator"),
         ("r", "refresh", "Refresh checks"),
         ("c", "install_cron", "Install cron"),
-        ("q", "quit", "Quit"),
+        ("q", "app.quit", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -407,11 +473,83 @@ class MainScreen(Screen):
             classes="intro",
         )
         yield DataTable(id="grid", cursor_type="row", zebra_stripes=True)
+        with Vertical(classes="logpane") as logpane:
+            logpane.border_title = "Cron logs (live)"
+            yield RichLog(id="logs", markup=True, highlight=False, wrap=True)
         yield Footer()
 
     def on_mount(self) -> None:
         self._build_table()
         self._run_checks()
+        self._log_offset = 0
+        self._log_inode: int | None = None
+        self._prime_log()
+        self.set_interval(1.0, self._poll_log)
+
+    def _log_file(self) -> Path:
+        return Path(DEFAULT_LOG_PATH).expanduser()
+
+    def _format_log_line(self, line: str) -> str:
+        safe = escape(line)
+        low = line.lower()
+        if "traceback" in low or "error" in low or "! err" in line:
+            return f"[red]{safe}[/red]"
+        if "resolved" in low:
+            return f"[green]{safe}[/green]"
+        if "alert" in low or "\u2717" in line or "still firing" in low:
+            return f"[yellow]{safe}[/yellow]"
+        return safe
+
+    def _prime_log(self) -> None:
+        """Seed the log pane with the tail of the existing cron log."""
+        log_widget = self.query_one("#logs", RichLog)
+        path = self._log_file()
+        if not path.exists():
+            log_widget.write(
+                "[dim]No log yet \u2014 the cron writes here once it runs "
+                "(every minute).[/dim]"
+            )
+            log_widget.write(f"[dim]{path}[/dim]")
+            return
+        try:
+            text = path.read_text(errors="replace")
+            stat = path.stat()
+        except OSError as exc:  # noqa: BLE001
+            log_widget.write(f"[red]Could not read log: {exc}[/red]")
+            return
+        for line in text.splitlines()[-200:]:
+            log_widget.write(self._format_log_line(line))
+        self._log_offset = stat.st_size
+        self._log_inode = stat.st_ino
+
+    def _poll_log(self) -> None:
+        """Append any bytes written to the cron log since the last poll."""
+        log_widget = self.query_one("#logs", RichLog)
+        path = self._log_file()
+        if not path.exists():
+            return
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        if self._log_inode is None:
+            self._log_inode = stat.st_ino
+        # Detect rotation (new inode) or truncation (file shrank): start over.
+        if stat.st_ino != self._log_inode or stat.st_size < self._log_offset:
+            self._log_inode = stat.st_ino
+            self._log_offset = 0
+            log_widget.clear()
+        if stat.st_size == self._log_offset:
+            return
+        try:
+            with path.open("r", errors="replace") as handle:
+                handle.seek(self._log_offset)
+                data = handle.read()
+                self._log_offset = handle.tell()
+        except OSError:
+            return
+        for line in data.splitlines():
+            log_widget.write(self._format_log_line(line))
 
     def _build_table(self) -> None:
         table = self.query_one("#grid", DataTable)
@@ -544,18 +682,39 @@ class WatcherTUI(App):
     SUB_TITLE = f"v{__version__}"
     CSS = """
     .intro { padding: 1 2; color: $text-muted; }
-    .section { padding: 1 0 0 0; color: $accent; text-style: bold; }
-    .subsection { padding: 1 0 0 0; color: $secondary; }
+    .form-title { padding: 1 2 0 2; color: $accent; text-style: bold; }
     #form { padding: 0 2; }
+    .card {
+        border: round $surface-lighten-2;
+        border-title-color: $accent;
+        padding: 0 2 1 2;
+        margin: 1 0 0 0;
+        height: auto;
+    }
+    .card-hint { color: $text-muted; padding: 0 0 1 0; }
+    .field-label { color: $text-muted; padding: 0; }
+    .two-col { height: auto; }
+    .col { width: 1fr; height: auto; padding: 0 1 0 0; }
+    .col-narrow { width: 16; }
     .row { height: auto; padding: 1 0; }
     .buttons { padding: 1 0 2 0; }
     .buttons Button { margin: 0 1 0 0; }
     .status { padding: 1 0 0 2; }
-    .watch-row { height: auto; padding: 0 0; }
-    .watch-label { padding: 1 1 0 1; }
-    .cooldown-label { padding: 1 1 0 2; color: $text-muted; }
-    .cooldown-input { width: 12; }
+    .watch-head { height: auto; padding: 1 0 0 0; color: $text-muted; text-style: bold; }
+    .watch-row { height: auto; }
+    .col-switch { width: 10; }
+    .col-name { width: 1fr; }
+    .watch-row .col-name { padding: 1 1 0 0; }
+    .col-cool { width: 18; }
     DataTable { height: 1fr; margin: 0 1; }
+    .logpane {
+        height: 14;
+        border: round $surface-lighten-2;
+        border-title-color: $accent;
+        margin: 0 1 0 1;
+        padding: 0 1;
+    }
+    #logs { height: 1fr; background: $surface-darken-1; }
     Input { margin: 0 0 1 0; }
     """
 
