@@ -385,6 +385,18 @@ def _cooldown_elapsed(last_sent_iso: str | None, minutes: int) -> bool:
     return (_utc_now() - last_sent) >= timedelta(minutes=minutes)
 
 
+def _validator_name(validator: dict[str, Any]) -> str:
+    """Human-friendly name for alert messages (falls back to identity)."""
+    return validator.get("name") or validator.get("identity_pubkey") or "validator"
+
+
+def _short_pubkey(pubkey: str) -> str:
+    """Compact a base58 pubkey to ``ABCD...WXYZ`` for inline references."""
+    if not pubkey or len(pubkey) <= 11:
+        return pubkey
+    return f"{pubkey[:4]}...{pubkey[-4:]}"
+
+
 def _run_sfdp_version_watcher(
     validator: dict[str, Any], state: dict[str, Any]
 ) -> WatchResult:
@@ -395,6 +407,8 @@ def _run_sfdp_version_watcher(
 
     cluster = validator["cluster"]
     identity = validator["identity_pubkey"]
+    name = _validator_name(validator)
+    short_id = _short_pubkey(identity)
     rpc_url = resolve_rpc_url(validator)
     agave_min, firedancer_min = _get_sfdp_min_versions(
         watcher_cfg.get("api_url", SFDP_REQUIRED_VERSIONS_API)
@@ -404,7 +418,8 @@ def _run_sfdp_version_watcher(
         return WatchResult(
             True,
             watcher_name,
-            f"Validator {identity} is not visible in getClusterNodes for {cluster}.",
+            f"Validator {name} ({short_id}) is not visible in "
+            f"getClusterNodes for {cluster}.",
         )
 
     validator_parts = _parse_version(validator_version)
@@ -424,7 +439,7 @@ def _run_sfdp_version_watcher(
         return WatchResult(False, watcher_name)
 
     message = (
-        f"Validator {identity} version check failed. "
+        f"Validator {name} ({short_id}) version check failed. "
         f"Current: {validator_version} ({client_display}). "
         f"Required: {required_label}."
     )
@@ -442,14 +457,15 @@ def _run_delinquent_watcher(
     cluster = validator["cluster"]
     vote_pubkey = validator["vote_pubkey"]
     rpc_url = resolve_rpc_url(validator)
-    identity = validator["identity_pubkey"]
+    name = _validator_name(validator)
+    short_id = _short_pubkey(validator["identity_pubkey"])
 
     status = _vote_account_status(rpc_url, vote_pubkey)
     if status == "current":
         return WatchResult(False, watcher_name)
     if status == "delinquent":
         message = (
-            f"Validator {identity} appears delinquent on {cluster}. "
+            f"Validator {name} ({short_id}) appears delinquent on {cluster}. "
             f"Vote account: {vote_pubkey}."
         )
         return WatchResult(True, watcher_name, message)
@@ -457,8 +473,8 @@ def _run_delinquent_watcher(
     # status == "absent": the endpoint doesn't know this vote account. Alert
     # rather than silently passing, since this is almost always a config error.
     message = (
-        f"Validator {identity} vote account {vote_pubkey} was not found in "
-        f"getVoteAccounts on {cluster} via {rpc_url}. Check the cluster and "
+        f"Validator {name} ({short_id}) vote account {vote_pubkey} was not found "
+        f"in getVoteAccounts on {cluster} via {rpc_url}. Check the cluster and "
         f"vote pubkey, or set a custom RPC URL that serves this validator."
     )
     return WatchResult(True, watcher_name, message)
@@ -474,6 +490,8 @@ def _run_software_outdated_watcher(
 
     cluster = validator["cluster"]
     identity = validator["identity_pubkey"]
+    name = _validator_name(validator)
+    short_id = _short_pubkey(identity)
     rpc_url = resolve_rpc_url(validator)
 
     validator_version, client_id = _get_cluster_node_info(rpc_url, identity)
@@ -481,7 +499,8 @@ def _run_software_outdated_watcher(
         return WatchResult(
             True,
             watcher_name,
-            f"Validator {identity} is not visible in getClusterNodes for {cluster}.",
+            f"Validator {name} ({short_id}) is not visible in "
+            f"getClusterNodes for {cluster}.",
         )
 
     validator_parts = _parse_version(validator_version)
@@ -502,7 +521,7 @@ def _run_software_outdated_watcher(
         return WatchResult(False, watcher_name)
 
     message = (
-        f"Validator {identity} has outdated software. "
+        f"Validator {name} ({short_id}) has outdated software. "
         f"Current: {validator_version}. "
         f"Latest v{validator_parts[0]}.x release: {latest_version}."
     )
