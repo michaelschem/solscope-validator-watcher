@@ -21,12 +21,11 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
     Button,
+    DataTable,
     Footer,
     Header,
     Input,
     Label,
-    ListItem,
-    ListView,
     Select,
     Static,
     Switch,
@@ -36,6 +35,7 @@ from . import __version__
 from .app import (
     DEFAULT_LOG_PATH,
     WATCHER_LABELS,
+    WATCHER_RUNNERS,
     _detect_client,
     _get_cluster_node_info,
     _parse_version,
@@ -51,6 +51,25 @@ from .app import (
 )
 
 _CLUSTERS = ["mainnet-beta", "testnet"]
+
+# Short column headers for the dashboard grid (one per watcher).
+_WATCHER_COLUMNS = {
+    "sfdp_version": "SFDP ver",
+    "software_outdated": "Outdated",
+    "delinquent": "Delinquent",
+}
+
+# Placeholder shown in a grid cell while its check is still running.
+_CELL_CHECKING = "[dim]…[/dim]"
+
+
+def _status_cell(result: Any) -> str:
+    """Render a watcher result as a colored grid cell."""
+    if result.status == "disabled":
+        return "[dim]— off[/dim]"
+    if result.fired:
+        return "[bold red]✗ alarm[/bold red]"
+    return "[bold green]✓ ok[/bold green]"
 
 # notifications key -> human label, for list-style channels.
 _LIST_CHANNELS = [
@@ -80,15 +99,6 @@ def _csv_to_list(text: str) -> list[str]:
 
 def _list_to_csv(values: list[str] | None) -> str:
     return ", ".join(values or [])
-
-
-def _watcher_summary(watchers: dict[str, Any]) -> str:
-    enabled = [
-        WATCHER_LABELS[name]
-        for name in WATCHER_LABELS
-        if watchers.get(name, {}).get("enabled")
-    ]
-    return ", ".join(enabled) if enabled else "all disabled"
 
 
 def _channel_summary(notifications: dict[str, Any]) -> str:
@@ -382,6 +392,7 @@ class MainScreen(Screen):
 
     BINDINGS = [
         ("a", "add", "Add validator"),
+        ("r", "refresh", "Refresh checks"),
         ("c", "install_cron", "Install cron"),
         ("q", "quit", "Quit"),
     ]
@@ -389,43 +400,80 @@ class MainScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(
-            "SolScope Validator Watcher \u2014 press [b]a[/b] to add, "
-            "[b]Enter[/b] to edit, [b]c[/b] to install cron, [b]q[/b] to quit.",
+            "Live status grid \u2014 [bold green]✓ ok[/bold green] / "
+            "[bold red]✗ alarm[/bold red] / [dim]— off[/dim].  "
+            "[b]Enter[/b] edit row · [b]a[/b] add · [b]r[/b] refresh · "
+            "[b]c[/b] cron · [b]q[/b] quit.",
             classes="intro",
         )
-        yield ListView(*self._items(), id="validator-list")
+        yield DataTable(id="grid", cursor_type="row", zebra_stripes=True)
         yield Footer()
 
-    def _items(self) -> list[ListItem]:
-        items: list[ListItem] = []
-        validators = self.app.config["validators"]
-        if not validators:
-            items.append(
-                ListItem(Static("[dim]No validators yet \u2014 press 'a' to add one.[/dim]"), id="empty")
+    def on_mount(self) -> None:
+        self._build_table()
+        self._run_checks()
+
+    def _build_table(self) -> None:
+        table = self.query_one("#grid", DataTable)
+        table.clear(columns=True)
+        table.add_column("Validator", key="validator")
+        for name, label in _WATCHER_COLUMNS.items():
+            table.add_column(label, key=name)
+        for index, validator in enumerate(self.app.config["validators"]):
+            name = (
+                validator.get("name")
+                or validator.get("identity_pubkey")
+                or "validator"
             )
-        for index, validator in enumerate(validators):
-            identity = validator.get("identity_pubkey", "")
-            short_id = (identity[:8] + "\u2026") if len(identity) > 8 else identity
-            text = (
-                f"[b]{validator.get('name', 'validator')}[/b]  "
-                f"[dim]({validator.get('cluster', '?')})[/dim]\n"
-                f"  id: {short_id}   watchers: {_watcher_summary(validator.get('watchers', {}))}\n"
-                f"  alerts: {_channel_summary(validator.get('notifications', {}))}"
+            cluster = validator.get("cluster", "?")
+            first = f"{name}  [dim]({cluster})[/dim]"
+            table.add_row(
+                first,
+                *[_CELL_CHECKING for _ in _WATCHER_COLUMNS],
+                key=f"val-{index}",
             )
-            items.append(ListItem(Static(text), id=f"val-{index}"))
-        items.append(ListItem(Static("[b green]+ Add validator[/b green]"), id="add"))
-        return items
+
+    @work(thread=True, exclusive=True, group="checks")
+    def _run_checks(self) -> None:
+        """Evaluate every watcher for every validator and fill in the grid.
+
+        Runs in a background thread so the UI stays responsive; each cell is
+        updated as its check completes for a live feel.
+        """
+        table = self.query_one("#grid", DataTable)
+        for index, validator in enumerate(self.app.config["validators"]):
+            row_key = f"val-{index}"
+            try:
+                norm = normalize_validator(validator)
+            except Exception:  # noqa: BLE001
+                norm = validator
+            for name in _WATCHER_COLUMNS:
+                runner = WATCHER_RUNNERS.get(name)
+                try:
+                    cell = _status_cell(runner(norm, {}))
+                except Exception:  # noqa: BLE001 - a failing check shows as "!"
+                    cell = "[yellow]! err[/yellow]"
+                try:
+                    self.app.call_from_thread(
+                        table.update_cell, row_key, name, cell
+                    )
+                except Exception:  # noqa: BLE001 - row may have been rebuilt
+                    pass
 
     def _refresh_list(self) -> None:
-        self.refresh(recompose=True)
+        self._build_table()
+        self._run_checks()
 
-    @on(ListView.Selected)
-    def _on_selected(self, event: ListView.Selected) -> None:
-        item_id = event.item.id or ""
-        if item_id == "add":
-            self.action_add()
-        elif item_id.startswith("val-"):
-            self._edit(int(item_id.split("-", 1)[1]))
+    def action_refresh(self) -> None:
+        self._build_table()
+        self._run_checks()
+        self.app.notify("Re-running checks ...")
+
+    @on(DataTable.RowSelected)
+    def _on_row_selected(self, event: DataTable.RowSelected) -> None:
+        key = event.row_key.value or ""
+        if key.startswith("val-"):
+            self._edit(int(key.split("-", 1)[1]))
 
     def action_add(self) -> None:
         new_validator = {
@@ -507,8 +555,7 @@ class WatcherTUI(App):
     .watch-label { padding: 1 1 0 1; }
     .cooldown-label { padding: 1 1 0 2; color: $text-muted; }
     .cooldown-input { width: 12; }
-    ListView { height: 1fr; margin: 0 1; }
-    ListItem { padding: 1 1; }
+    DataTable { height: 1fr; margin: 0 1; }
     Input { margin: 0 0 1 0; }
     """
 

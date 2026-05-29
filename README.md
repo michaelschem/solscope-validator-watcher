@@ -91,11 +91,13 @@ By default everything lives under `~/.solscope-validator-watcher/`
 (`config.json`, the cooldown state file, and `watcher.log`), so no root access is
 required. Use `--config <path>` to point at a different file.
 
-In the dashboard you can:
+The dashboard is a **live status grid**: each row is a validator, each column is a
+watcher, and every cell shows that check's current state — green `✓ ok`, red
+`✗ alarm`, dim `— off` (disabled), or yellow `! err` (the check itself failed).
+All checks run on startup so you get an immediate picture, and you can re-run them
+any time with **`r`**.
 
-- See every configured validator at a glance — cluster, identity, which watchers are
-  enabled, and which notification channels will alert.
-- Press **`a`** to add a validator, or **Enter** on a row to edit it.
+- **Enter** on a row opens the editor for that validator; **`a`** adds a new one.
 - In the editor: set cluster (or a custom RPC URL), identity/vote keys, toggle each
   watcher and its cooldown, and fill in notification channels.
   - **`Ctrl+S`** save · **`Ctrl+T`** send test notifications · **`Ctrl+D`** delete · **`Esc`** cancel
@@ -104,7 +106,7 @@ In the dashboard you can:
 - **Saving a validator automatically installs/refreshes the one-minute cron job**, so
   monitoring is active without an extra step. Press **`c`** to (re)install it manually
   — handy if you move the virtualenv or the cron update was skipped.
-- Press **`q`** to quit.
+- Press **`r`** to refresh the grid, **`q`** to quit.
 
 Prefer to edit by hand? Copy [`config.example.json`](./config.example.json) and edit it.
 
