@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solscope-validator-watcher"
+version = "0.1.0"
+description = "Standalone cron-based monitoring and alerting for Solana validators"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Mike Schem", email = "michaelfschem@gmail.com" },
+]
+keywords = [
+    "solana",
+    "validator",
+    "monitoring",
+    "alerting",
+    "agave",
+    "sfdp",
+    "cron",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Monitoring",
+]
+dependencies = [
+    "requests>=2.31.0",
+    "twilio>=9.0.5",
+    "textual>=0.80",
+]
+
+[project.urls]
+Homepage = "https://github.com/michaelschem/solscope"
+Repository = "https://github.com/michaelschem/solscope"
+Issues = "https://github.com/michaelschem/solscope/issues"
+
+[project.scripts]
+solscope-validator-watcher = "validator_watcher.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

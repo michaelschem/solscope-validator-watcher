@@ -1,0 +1,50 @@
+{
+  "validators": [
+    {
+      "name": "My Mainnet Validator",
+      "cluster": "mainnet-beta",
+      "rpc_url": null,
+      "identity_pubkey": "REPLACE_WITH_VALIDATOR_IDENTITY_PUBKEY",
+      "vote_pubkey": "REPLACE_WITH_VALIDATOR_VOTE_PUBKEY",
+      "watchers": {
+        "sfdp_version": {
+          "enabled": true,
+          "api_url": "https://api.solana.org/api/community/v1/sfdp_required_versions?cluster=mainnet-beta",
+          "cooldown_minutes": 360
+        },
+        "software_outdated": {
+          "enabled": true,
+          "api_url": "https://api.github.com/repos/anza-xyz/agave/releases",
+          "cooldown_minutes": 360
+        },
+        "delinquent": {
+          "enabled": true,
+          "cooldown_minutes": 10
+        }
+      },
+      "notifications": {
+        "slack_webhooks": [],
+        "discord_webhooks": [],
+        "webhooks": [],
+        "ntfy_topics": [],
+        "pagerduty_integration_keys": [],
+        "twilio": {
+          "account_sid": "",
+          "auth_token": "",
+          "from_phone": "",
+          "to_phones": []
+        },
+        "smtp_email": {
+          "host": "",
+          "port": 587,
+          "username": "",
+          "password": "",
+          "from_email": "",
+          "to_emails": [],
+          "use_tls": true
+        }
+      }
+    }
+  ],
+  "state_file": "~/.solscope-validator-watcher/config.state.json"
+}
