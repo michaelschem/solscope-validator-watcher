@@ -191,10 +191,26 @@ def _detect_client(client_id: str | None, version_parts: tuple[int, int, int]) -
     return "firedancer" if version_parts[0] == 0 else "agave"
 
 
-def _is_validator_delinquent(rpc_url: str, vote_pubkey: str) -> bool:
+def _vote_account_status(rpc_url: str, vote_pubkey: str) -> str:
+    """Classify a vote account as ``delinquent``, ``current``, or ``absent``.
+
+    ``absent`` means the endpoint returned neither a current nor a delinquent
+    entry for the key. That usually signals a misconfiguration (wrong cluster or
+    an RPC that doesn't know this validator) rather than a healthy node, so
+    callers should surface it instead of treating it as "not delinquent".
+    """
     vote_accounts = _rpc_call(rpc_url, "getVoteAccounts", [{"votePubkey": vote_pubkey}])
-    delinquent = vote_accounts.get("delinquent", [])
-    return any(item.get("votePubkey") == vote_pubkey for item in delinquent)
+    if any(
+        item.get("votePubkey") == vote_pubkey
+        for item in vote_accounts.get("delinquent", [])
+    ):
+        return "delinquent"
+    if any(
+        item.get("votePubkey") == vote_pubkey
+        for item in vote_accounts.get("current", [])
+    ):
+        return "current"
+    return "absent"
 
 
 def _get_sfdp_min_versions(api_url: str) -> tuple[str | None, str | None]:
@@ -426,13 +442,24 @@ def _run_delinquent_watcher(
     cluster = validator["cluster"]
     vote_pubkey = validator["vote_pubkey"]
     rpc_url = resolve_rpc_url(validator)
-    if not _is_validator_delinquent(rpc_url, vote_pubkey):
-        return WatchResult(False, watcher_name)
-
     identity = validator["identity_pubkey"]
+
+    status = _vote_account_status(rpc_url, vote_pubkey)
+    if status == "current":
+        return WatchResult(False, watcher_name)
+    if status == "delinquent":
+        message = (
+            f"Validator {identity} appears delinquent on {cluster}. "
+            f"Vote account: {vote_pubkey}."
+        )
+        return WatchResult(True, watcher_name, message)
+
+    # status == "absent": the endpoint doesn't know this vote account. Alert
+    # rather than silently passing, since this is almost always a config error.
     message = (
-        f"Validator {identity} appears delinquent on {cluster}. "
-        f"Vote account: {vote_pubkey}."
+        f"Validator {identity} vote account {vote_pubkey} was not found in "
+        f"getVoteAccounts on {cluster} via {rpc_url}. Check the cluster and "
+        f"vote pubkey, or set a custom RPC URL that serves this validator."
     )
     return WatchResult(True, watcher_name, message)
 
