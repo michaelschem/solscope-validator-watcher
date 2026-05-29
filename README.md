@@ -1,7 +1,7 @@
 # solscope-validator-watcher
 
 Cron-friendly Solana validator monitoring you can run on your own validator host.
-It reproduces the alerting that [SolScope](https://github.com/michaelschem/solscope)
+It reproduces the alerting that [SolScope](https://solscope.io)
 provided as a hosted service, with no server or database required: a config file, a
 state file for cooldowns, and a one-minute cron job.
 
@@ -14,7 +14,7 @@ channels — plus a non-interactive `run-once` command for cron.
 | Watcher | What it checks |
 |---|---|
 | `sfdp_version` | Your node's version against the SFDP **required** minimum (`agave_min_version` from `api.solana.org`). |
-| `software_outdated` | Your node's version against the **latest** Agave release on GitHub (`anza-xyz/agave`, matched by Mainnet/Testnet release name). |
+| `software_outdated` | Your node's version against the **latest stable** Agave release on GitHub (`anza-xyz/agave`) within your node's current major version line (e.g. a `v3.1.x` node is compared to the newest `v3.x.y`). |
 | `delinquent` | Whether your vote account is reported delinquent via `getVoteAccounts`. |
 
 Each watcher has its own `cooldown_minutes` so a per-minute cron won't spam you while

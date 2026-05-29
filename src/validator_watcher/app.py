@@ -25,12 +25,6 @@ DEFAULT_CONFIG_DIR = Path.home() / ".solscope-validator-watcher"
 DEFAULT_CONFIG_PATH = str(DEFAULT_CONFIG_DIR / "config.json")
 DEFAULT_LOG_PATH = str(DEFAULT_CONFIG_DIR / "watcher.log")
 
-# Maps the SolScope cluster name to the substring used in Agave release names.
-_RELEASE_CHANNEL_BY_CLUSTER = {
-    "mainnet-beta": "Mainnet",
-    "testnet": "Testnet",
-}
-
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -193,33 +187,44 @@ def _get_required_jito_tag(api_url: str) -> str:
     return f"v{required_version}-jito"
 
 
-def _get_latest_agave_version(cluster: str, api_url: str) -> str:
-    channel = _RELEASE_CHANNEL_BY_CLUSTER.get(cluster)
-    if channel is None:
-        raise RuntimeError(
-            f"No Agave release channel mapping for cluster '{cluster}'."
-        )
+def _get_latest_agave_version(api_url: str, major: int | None = None) -> str | None:
+    """Return the newest stable Agave release as ``x.y.z``.
 
-    resp = requests.get(api_url, timeout=15)
+    Anza no longer encodes the cluster (Mainnet/Testnet) in release names, so we
+    select by version instead: the highest stable (non-prerelease) release. When
+    ``major`` is given, only releases in that major line are considered, which
+    keeps a node from being told it's "outdated" against a newer major it isn't
+    expected to run yet. Returns ``None`` if no matching release is found.
+    """
+    resp = requests.get(api_url, params={"per_page": 100}, timeout=15)
     resp.raise_for_status()
     releases = resp.json()
+    if not isinstance(releases, list):
+        raise RuntimeError(f"Unexpected response from {api_url}: {releases!r}")
 
     versions: list[tuple[int, int, int]] = []
     for release in releases:
-        if channel in (release.get("name") or ""):
-            tag = (release.get("tag_name") or "").lstrip("v")
-            try:
-                versions.append(_parse_version(tag))
-            except (ValueError, AttributeError):
-                continue
+        if not isinstance(release, dict):
+            continue
+        # Skip drafts and pre-releases (betas/rcs); they aren't recommended.
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        tag = (release.get("tag_name") or "").lstrip("v")
+        # Skip pre-release tags like "1.2.3-rc.1" that aren't flagged as such.
+        if "-" in tag:
+            continue
+        try:
+            parsed = _parse_version(tag)
+        except (ValueError, AttributeError):
+            continue
+        if major is not None and parsed[0] != major:
+            continue
+        versions.append(parsed)
 
     if not versions:
-        raise RuntimeError(
-            f"No {channel} Agave releases found at {api_url}."
-        )
+        return None
 
-    major, minor, patch = max(versions)
-    return f"{major}.{minor}.{patch}"
+    return "{}.{}.{}".format(*max(versions))
 
 
 def _send_notifications(message: str, config: dict[str, Any]) -> None:
@@ -395,9 +400,6 @@ def _run_software_outdated_watcher(
     identity = validator["identity_pubkey"]
     rpc_url = resolve_rpc_url(validator)
 
-    latest_version = _get_latest_agave_version(
-        cluster, watcher_cfg.get("api_url", AGAVE_RELEASES_API)
-    )
     validator_version = _get_cluster_node_version(rpc_url, identity)
     if validator_version is None:
         return WatchResult(
@@ -407,13 +409,22 @@ def _run_software_outdated_watcher(
         )
 
     validator_parts = _parse_version(validator_version)
+    latest_version = _get_latest_agave_version(
+        watcher_cfg.get("api_url", AGAVE_RELEASES_API),
+        major=validator_parts[0],
+    )
+    # No comparable stable release for this major line: nothing to report.
+    if latest_version is None:
+        return WatchResult(False, watcher_name)
+
     latest_parts = _parse_version(latest_version)
     if validator_parts >= latest_parts:
         return WatchResult(False, watcher_name)
 
     message = (
         f"Validator {identity} has outdated software. "
-        f"Current: {validator_version}. Latest {cluster}: {latest_version}."
+        f"Current: {validator_version}. "
+        f"Latest v{validator_parts[0]}.x release: {latest_version}."
     )
     return WatchResult(True, watcher_name, message)
 
@@ -450,7 +461,18 @@ def run_once(config_path: Path) -> list[WatchResult]:
         vkey = validator.get("identity_pubkey") or validator.get("name") or "validator"
         validator_state = state.setdefault(vkey, {})
         for watcher_name, runner in WATCHER_RUNNERS.items():
-            result = runner(validator, validator_state)
+            try:
+                result = runner(validator, validator_state)
+            except Exception as exc:  # noqa: BLE001 - keep other watchers running
+                # A single flaky check (RPC/API hiccup) must not take down the
+                # whole run, or cron would re-fire the same traceback every
+                # minute. Log it and move on.
+                print(
+                    f"[{vkey}] watcher '{watcher_name}' failed: {exc}",
+                    file=sys.stderr,
+                )
+                results.append(WatchResult(False, watcher_name))
+                continue
             results.append(result)
             if result.fired and result.message:
                 _send_notifications(result.message, validator)
@@ -500,6 +522,13 @@ def main(argv: list[str] | None = None) -> int:
             "SolScope standalone validator watcher. "
             "Run with no command to open the full-screen TUI."
         )
+    )
+    from . import __version__
+
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "--config",
