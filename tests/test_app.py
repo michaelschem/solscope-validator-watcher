@@ -172,6 +172,7 @@ def test_sfdp_agave_below_minimum_alerts(monkeypatch):
     res = app._run_sfdp_version_watcher(_validator(), {})
     assert res.fired is True
     assert "Required: 2.1.0" in res.message
+    assert res.detail == "2.0.0 != 2.1.0"  # shown in the dashboard grid
 
 
 def test_sfdp_agave_at_or_above_minimum_ok(monkeypatch):
@@ -179,6 +180,7 @@ def test_sfdp_agave_at_or_above_minimum_ok(monkeypatch):
     monkeypatch.setattr(app, "_get_cluster_node_info", lambda url, ident: ("2.2.0", "Agave"))
     res = app._run_sfdp_version_watcher(_validator(), {})
     assert res.fired is False
+    assert res.detail == "2.2.0"  # version shown once when healthy
 
 
 def test_sfdp_firedancer_compared_against_firedancer_minimum(monkeypatch):
@@ -215,6 +217,7 @@ def test_software_outdated_alerts_when_behind(monkeypatch):
     res = app._run_software_outdated_watcher(_validator(), {})
     assert res.fired is True
     assert "2.1.0" in res.message
+    assert res.detail == "2.0.0 != 2.1.0"
 
 
 def test_software_outdated_ok_when_current(monkeypatch):
@@ -222,6 +225,7 @@ def test_software_outdated_ok_when_current(monkeypatch):
     monkeypatch.setattr(app, "_get_latest_agave_version", lambda url, major=None: "2.1.0")
     res = app._run_software_outdated_watcher(_validator(), {})
     assert res.fired is False
+    assert res.detail == "2.1.0"
 
 
 # --------------------------------------------------------------------------- #

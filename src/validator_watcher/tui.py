@@ -67,9 +67,18 @@ _CELL_CHECKING = "[dim]…[/dim]"
 
 
 def _status_cell(result: Any) -> str:
-    """Render a watcher result as a colored grid cell."""
+    """Render a watcher result as a colored grid cell.
+
+    Version-based checks carry a ``detail`` (e.g. ``2.1.0`` when healthy or
+    ``2.1.0 != 2.2.0`` when behind), which we show in place of the generic
+    ok/alarm glyph so the actual version is visible at a glance.
+    """
     if result.status == "disabled":
         return "[dim]— off[/dim]"
+    detail = getattr(result, "detail", "") or ""
+    if detail:
+        color = "bold red" if result.fired else "green"
+        return f"[{color}]{escape(detail)}[/{color}]"
     if result.fired:
         return "[bold red]✗ alarm[/bold red]"
     return "[bold green]✓ ok[/bold green]"

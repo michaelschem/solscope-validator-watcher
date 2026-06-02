@@ -372,6 +372,9 @@ class WatchResult:
     # (still firing, within cooldown), "resolved" (cleared), "disabled",
     # or "error". Watchers themselves only set "ok"/"alert"/"disabled".
     status: str = "ok"
+    # Short human display for the dashboard grid, e.g. a version ("2.1.0") when
+    # healthy or "2.1.0 != 2.2.0" when the check is comparing versions.
+    detail: str = ""
 
     def __post_init__(self) -> None:
         if self.fired and self.status == "ok":
@@ -434,16 +437,21 @@ def _run_sfdp_version_watcher(
     required_label = firedancer_min if client == "firedancer" else agave_min
     if not required_label:
         # No minimum published for this client; nothing to enforce.
-        return WatchResult(False, watcher_name)
+        return WatchResult(False, watcher_name, detail=validator_version)
     if validator_parts >= _parse_version(required_label):
-        return WatchResult(False, watcher_name)
+        return WatchResult(False, watcher_name, detail=validator_version)
 
     message = (
         f"Validator {name} ({short_id}) version check failed. "
         f"Current: {validator_version} ({client_display}). "
         f"Required: {required_label}."
     )
-    return WatchResult(True, watcher_name, message)
+    return WatchResult(
+        True,
+        watcher_name,
+        message,
+        detail=f"{validator_version} != {required_label}",
+    )
 
 
 def _run_delinquent_watcher(
@@ -506,7 +514,7 @@ def _run_software_outdated_watcher(
     validator_parts = _parse_version(validator_version)
     # This watcher tracks Agave GitHub releases; it doesn't apply to Firedancer.
     if _detect_client(client_id, validator_parts) == "firedancer":
-        return WatchResult(False, watcher_name)
+        return WatchResult(False, watcher_name, detail=validator_version)
 
     latest_version = _get_latest_agave_version(
         watcher_cfg.get("api_url", AGAVE_RELEASES_API),
@@ -514,18 +522,23 @@ def _run_software_outdated_watcher(
     )
     # No comparable stable release for this major line: nothing to report.
     if latest_version is None:
-        return WatchResult(False, watcher_name)
+        return WatchResult(False, watcher_name, detail=validator_version)
 
     latest_parts = _parse_version(latest_version)
     if validator_parts >= latest_parts:
-        return WatchResult(False, watcher_name)
+        return WatchResult(False, watcher_name, detail=validator_version)
 
     message = (
         f"Validator {name} ({short_id}) has outdated software. "
         f"Current: {validator_version}. "
         f"Latest v{validator_parts[0]}.x release: {latest_version}."
     )
-    return WatchResult(True, watcher_name, message)
+    return WatchResult(
+        True,
+        watcher_name,
+        message,
+        detail=f"{validator_version} != {latest_version}",
+    )
 
 
 WATCHER_RUNNERS = {

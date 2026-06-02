@@ -77,6 +77,21 @@ After activating the venv, the `solscope-validator-watcher` command is on your
 `PATH`. You don't need to keep the venv activated for cron — see
 [Run (cron)](#run-cron), which records the venv's Python automatically.
 
+### Run it from anywhere (optional)
+
+To run `solscope-validator-watcher` without activating the venv, symlink its
+executable into `/usr/local/bin`. The script's shebang points back at the venv's
+Python, so it keeps using the right environment regardless of where you call it:
+
+```bash
+sudo ln -sf ~/.solscope-validator-watcher/venv/bin/solscope-validator-watcher \
+  /usr/local/bin/solscope-validator-watcher
+```
+
+Now just run `solscope-validator-watcher` from any directory. Upgrades inside the
+venv (`pip install --upgrade ...`) are picked up automatically — you don't need
+to recreate the symlink.
+
 If you prefer not to manage a venv yourself, [`pipx`](https://pipx.pypa.io) does
 it for you:
 
@@ -89,6 +104,12 @@ pipx install solscope-validator-watcher
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
+```
+
+## Update
+
+```bash
+pip install --upgrade solscope-validator-watcher
 ```
 
 ## Configure (the TUI)
