@@ -815,8 +815,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     sub.add_parser(
-        "upgrade",
-        help="Upgrade solscope-validator-watcher to the latest version via pip",
+        "update",
+        aliases=["upgrade"],
+        help="Update solscope-validator-watcher to the latest version via pip",
     )
 
     args = parser.parse_args(argv)
@@ -833,7 +834,7 @@ def main(argv: list[str] | None = None) -> int:
         print(cron_cmd)
         return 0
 
-    if args.command == "upgrade":
+    if args.command in ("update", "upgrade"):
         # Resolve any symlinks (e.g. /usr/local/bin → venv/bin) so we always
         # upgrade the venv that owns this entry-point, not whatever Python
         # happens to be active in the caller's shell.

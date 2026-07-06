@@ -344,6 +344,24 @@ def test_run_once_trigger_active_resolve(tmp_path: Path, monkeypatch):
     assert any(r.status == "resolved" for r in results)
 
 
+# --------------------------------------------------------------------------- #
+# CLI: self-update command
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("command", ["update", "upgrade"])
+def test_cli_update_runs_pip_upgrade(monkeypatch, command):
+    calls: list[list[str]] = []
+
+    class _Ret:
+        returncode = 0
+
+    monkeypatch.setattr(
+        app.subprocess, "run", lambda cmd, **kwargs: calls.append(cmd) or _Ret()
+    )
+    assert app.main([command]) == 0
+    assert len(calls) == 1
+    assert calls[0][-4:] == ["pip", "install", "--upgrade", "solscope-validator-watcher"]
+
+
 def test_run_once_isolates_watcher_failures(tmp_path: Path, monkeypatch):
     """A throwing watcher must not abort the run or masquerade as a recovery."""
     monkeypatch.setattr(app, "_send_notifications", lambda *a, **k: None)

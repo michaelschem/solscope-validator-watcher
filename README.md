@@ -109,8 +109,13 @@ pip install -e .
 ## Update
 
 ```bash
-pip install --upgrade solscope-validator-watcher
+solscope-validator-watcher update
 ```
+
+This upgrades the package inside the virtualenv that owns the command — it
+resolves the `/usr/local/bin` symlink if you created one, so you don't need to
+activate the venv first. (`upgrade` works too.) It is equivalent to running
+`pip install --upgrade solscope-validator-watcher` inside that venv.
 
 ## Configure (the TUI)
 
