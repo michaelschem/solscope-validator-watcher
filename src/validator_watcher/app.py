@@ -213,11 +213,13 @@ def _vote_account_status(rpc_url: str, vote_pubkey: str) -> str:
     return "absent"
 
 
-def _get_sfdp_min_versions(api_url: str) -> tuple[str | None, str | None]:
-    """Return ``(agave_min_version, firedancer_min_version)`` from the SFDP API.
+def _get_sfdp_requirements(api_url: str) -> list[dict[str, Any]]:
+    """Return per-epoch SFDP requirements, sorted by epoch (ascending).
 
-    The Solana Foundation publishes a separate required minimum for each client,
-    so callers can validate a node against the line it actually runs.
+    The Solana Foundation publishes a required minimum per epoch and per client
+    (Agave vs Firedancer), and future epochs in the list act as upgrade
+    deadlines. Each returned entry is
+    ``{"epoch": int, "agave": str | None, "firedancer": str | None}``.
     """
     resp = requests.get(api_url, timeout=15)
     resp.raise_for_status()
@@ -225,8 +227,46 @@ def _get_sfdp_min_versions(api_url: str) -> tuple[str | None, str | None]:
     data = payload.get("data", [])
     if not data:
         raise RuntimeError("No version data from Solana API")
-    latest = data[-1]
-    return latest.get("agave_min_version"), latest.get("firedancer_min_version")
+    entries = [
+        {
+            "epoch": item["epoch"],
+            "agave": item.get("agave_min_version"),
+            "firedancer": item.get("firedancer_min_version"),
+        }
+        for item in data
+        if item.get("epoch") is not None
+    ]
+    if not entries:
+        raise RuntimeError("No epoch data from Solana API")
+    entries.sort(key=lambda entry: entry["epoch"])
+    return entries
+
+
+def _get_epoch_info(rpc_url: str) -> dict[str, Any]:
+    """Return ``getEpochInfo`` (epoch, slotIndex, slotsInEpoch, ...)."""
+    return _rpc_call(rpc_url, "getEpochInfo")
+
+
+# Target slot duration used to convert "slots until epoch X" into wall time.
+# Mainnet averages very close to this, so estimates are labeled approximate.
+_SECONDS_PER_SLOT = 0.4
+
+
+def _estimate_days_until_epoch(epoch_info: dict[str, Any], target_epoch: int) -> float:
+    """Approximate days until ``target_epoch`` starts, from ``getEpochInfo``."""
+    current_epoch = epoch_info["epoch"]
+    if target_epoch <= current_epoch:
+        return 0.0
+    slots_left_in_current = epoch_info["slotsInEpoch"] - epoch_info["slotIndex"]
+    whole_epochs_between = (target_epoch - current_epoch - 1) * epoch_info["slotsInEpoch"]
+    total_slots = slots_left_in_current + whole_epochs_between
+    return total_slots * _SECONDS_PER_SLOT / 86400
+
+
+def _format_hours_left(days: float) -> str:
+    """Render an epoch-based time estimate in hours, e.g. ``72 hours``."""
+    hours = max(1, round(days * 24))
+    return f"{hours} hour" + ("s" if hours != 1 else "")
 
 
 def _get_latest_agave_version(api_url: str, major: int | None = None) -> str | None:
@@ -413,7 +453,7 @@ def _run_sfdp_version_watcher(
     name = _validator_name(validator)
     short_id = _short_pubkey(identity)
     rpc_url = resolve_rpc_url(validator)
-    agave_min, firedancer_min = _get_sfdp_min_versions(
+    requirements = _get_sfdp_requirements(
         watcher_cfg.get("api_url", SFDP_REQUIRED_VERSIONS_API)
     )
     validator_version, client_id = _get_cluster_node_info(rpc_url, identity)
@@ -429,23 +469,44 @@ def _run_sfdp_version_watcher(
     client = _detect_client(client_id, validator_parts)
     client_display = client_id or client.capitalize()
 
-    # Compare against the detected client's required minimum. (Agave and
+    # Compare against the detected client's required minimums. (Agave and
     # Firedancer use different version ranges, so the client must be detected
     # first to avoid comparing across them.) The check is version-only: Jito
     # builds no longer encode "-jito" in their reported version, so a node at or
     # above the minimum passes regardless of the specific Agave/Jito variant.
-    required_label = firedancer_min if client == "firedancer" else agave_min
-    if not required_label:
-        # No minimum published for this client; nothing to enforce.
-        return WatchResult(False, watcher_name, detail=validator_version)
-    if validator_parts >= _parse_version(required_label):
+    # The API publishes one minimum per epoch; find the earliest epoch whose
+    # minimum this node does not meet — that epoch is the upgrade deadline.
+    client_key = "firedancer" if client == "firedancer" else "agave"
+    failing_entry = None
+    for entry in requirements:
+        required = entry[client_key]
+        if required and validator_parts < _parse_version(required):
+            failing_entry = entry
+            break
+    if failing_entry is None:
+        # Meets every published minimum (or none is published for this client).
         return WatchResult(False, watcher_name, detail=validator_version)
 
-    message = (
-        f"Validator {name} ({short_id}) version check failed. "
-        f"Current: {validator_version} ({client_display}). "
-        f"Required: {required_label}."
-    )
+    required_label = failing_entry[client_key]
+    deadline_epoch = failing_entry["epoch"]
+    epoch_info = _get_epoch_info(rpc_url)
+    current_epoch = epoch_info["epoch"]
+
+    if deadline_epoch <= current_epoch:
+        message = (
+            f"SFDP: validator {name} ({short_id}) is below the SFDP required "
+            f"minimum version. Current: {validator_version} ({client_display}). "
+            f"SFDP requires {required_label} as of epoch {deadline_epoch} "
+            f"(current epoch is {current_epoch}) — the update is overdue."
+        )
+    else:
+        days_left = _estimate_days_until_epoch(epoch_info, deadline_epoch)
+        message = (
+            f"SFDP: validator {name} ({short_id}) needs an update to stay SFDP "
+            f"compliant. Current: {validator_version} ({client_display}). "
+            f"SFDP will require {required_label} starting epoch {deadline_epoch} "
+            f"— about {_format_hours_left(days_left)} left to update."
+        )
     return WatchResult(
         True,
         watcher_name,
@@ -529,7 +590,8 @@ def _run_software_outdated_watcher(
         return WatchResult(False, watcher_name, detail=validator_version)
 
     message = (
-        f"Validator {name} ({short_id}) has outdated software. "
+        f"Software outdated: validator {name} ({short_id}) is behind the latest "
+        f"Agave release (this is not an SFDP requirement). "
         f"Current: {validator_version}. "
         f"Latest v{validator_parts[0]}.x release: {latest_version}."
     )
@@ -550,7 +612,7 @@ WATCHER_RUNNERS = {
 # Human-readable labels for the watcher types.
 WATCHER_LABELS = {
     "sfdp_version": "SFDP required version",
-    "software_outdated": "Software outdated",
+    "software_outdated": "Software outdated (latest Agave release)",
     "delinquent": "Delinquency",
 }
 
@@ -752,6 +814,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Cron log file",
     )
 
+    sub.add_parser(
+        "upgrade",
+        help="Upgrade solscope-validator-watcher to the latest version via pip",
+    )
+
     args = parser.parse_args(argv)
     config_path = Path(args.config)
 
@@ -765,6 +832,21 @@ def main(argv: list[str] | None = None) -> int:
         print("Installed cron job:")
         print(cron_cmd)
         return 0
+
+    if args.command == "upgrade":
+        # Resolve any symlinks (e.g. /usr/local/bin → venv/bin) so we always
+        # upgrade the venv that owns this entry-point, not whatever Python
+        # happens to be active in the caller's shell.
+        script_dir = Path(sys.argv[0]).resolve().parent
+        venv_python = script_dir / "python"
+        if not venv_python.exists():
+            venv_python = script_dir / "python3"
+        if not venv_python.exists():
+            venv_python = Path(sys.executable)
+        ret = subprocess.run(
+            [str(venv_python), "-m", "pip", "install", "--upgrade", "solscope-validator-watcher"],
+        ).returncode
+        return ret
 
     # No subcommand: launch the full-screen TUI.
     from . import tui

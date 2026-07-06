@@ -156,27 +156,74 @@ def test_delinquent_absent_alerts_instead_of_passing(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# SFDP required-version watcher (client-aware comparison)
+# SFDP required-version watcher (client-aware, epoch-deadline-aware comparison)
 # --------------------------------------------------------------------------- #
+def _sfdp_requirements(*entries):
+    """Build the per-epoch requirement list the SFDP API helper returns."""
+    return [
+        {"epoch": epoch, "agave": agave, "firedancer": firedancer}
+        for epoch, agave, firedancer in entries
+    ]
+
+
+def _epoch_info(epoch, slot_index=0, slots_in_epoch=432_000):
+    return {"epoch": epoch, "slotIndex": slot_index, "slotsInEpoch": slots_in_epoch}
+
+
 def test_sfdp_not_visible_alerts(monkeypatch):
-    monkeypatch.setattr(app, "_get_sfdp_min_versions", lambda url: ("2.1.0", "0.900.0"))
+    monkeypatch.setattr(
+        app,
+        "_get_sfdp_requirements",
+        lambda url: _sfdp_requirements((800, "2.1.0", "0.900.0")),
+    )
     monkeypatch.setattr(app, "_get_cluster_node_info", lambda url, ident: (None, None))
     res = app._run_sfdp_version_watcher(_validator(), {})
     assert res.fired is True
     assert "not visible" in res.message
 
 
-def test_sfdp_agave_below_minimum_alerts(monkeypatch):
-    monkeypatch.setattr(app, "_get_sfdp_min_versions", lambda url: ("2.1.0", "0.900.0"))
+def test_sfdp_agave_below_minimum_is_overdue(monkeypatch):
+    monkeypatch.setattr(
+        app,
+        "_get_sfdp_requirements",
+        lambda url: _sfdp_requirements((800, "2.1.0", "0.900.0")),
+    )
     monkeypatch.setattr(app, "_get_cluster_node_info", lambda url, ident: ("2.0.0", "Agave"))
+    monkeypatch.setattr(app, "_get_epoch_info", lambda url: _epoch_info(810))
     res = app._run_sfdp_version_watcher(_validator(), {})
     assert res.fired is True
-    assert "Required: 2.1.0" in res.message
+    assert res.message.startswith("SFDP:")  # distinguishable from software_outdated
+    assert "SFDP requires 2.1.0" in res.message
+    assert "overdue" in res.message
     assert res.detail == "2.0.0 != 2.1.0"  # shown in the dashboard grid
 
 
+def test_sfdp_future_deadline_reports_hours_left(monkeypatch):
+    # Node meets today's minimum but not the one starting at epoch 812. With
+    # half of epoch 810 left plus one whole epoch (432k slots each, 0.4s/slot),
+    # the estimate is (216000 + 432000) * 0.4s = 3 days = 72 hours.
+    monkeypatch.setattr(
+        app,
+        "_get_sfdp_requirements",
+        lambda url: _sfdp_requirements((800, "2.0.0", None), (812, "2.2.0", None)),
+    )
+    monkeypatch.setattr(app, "_get_cluster_node_info", lambda url, ident: ("2.1.0", "Agave"))
+    monkeypatch.setattr(
+        app, "_get_epoch_info", lambda url: _epoch_info(810, slot_index=216_000)
+    )
+    res = app._run_sfdp_version_watcher(_validator(), {})
+    assert res.fired is True
+    assert "SFDP will require 2.2.0 starting epoch 812" in res.message
+    assert "about 72 hours left to update" in res.message
+    assert res.detail == "2.1.0 != 2.2.0"
+
+
 def test_sfdp_agave_at_or_above_minimum_ok(monkeypatch):
-    monkeypatch.setattr(app, "_get_sfdp_min_versions", lambda url: ("2.1.0", "0.900.0"))
+    monkeypatch.setattr(
+        app,
+        "_get_sfdp_requirements",
+        lambda url: _sfdp_requirements((800, "2.1.0", "0.900.0")),
+    )
     monkeypatch.setattr(app, "_get_cluster_node_info", lambda url, ident: ("2.2.0", "Agave"))
     res = app._run_sfdp_version_watcher(_validator(), {})
     assert res.fired is False
@@ -186,12 +233,22 @@ def test_sfdp_agave_at_or_above_minimum_ok(monkeypatch):
 def test_sfdp_firedancer_compared_against_firedancer_minimum(monkeypatch):
     # Agave min would flag a 0.x node, but a Firedancer node must be compared to
     # the firedancer minimum -> at/above it is OK.
-    monkeypatch.setattr(app, "_get_sfdp_min_versions", lambda url: ("2.1.0", "0.908.0"))
+    monkeypatch.setattr(
+        app,
+        "_get_sfdp_requirements",
+        lambda url: _sfdp_requirements((800, "2.1.0", "0.908.0")),
+    )
     monkeypatch.setattr(
         app, "_get_cluster_node_info", lambda url, ident: ("0.909.0", "Frankendancer")
     )
     res = app._run_sfdp_version_watcher(_validator(), {})
     assert res.fired is False
+
+
+def test_format_hours_left():
+    assert app._format_hours_left(3.0) == "72 hours"
+    assert app._format_hours_left(0.5) == "12 hours"
+    assert app._format_hours_left(0.02) == "1 hour"
 
 
 # --------------------------------------------------------------------------- #

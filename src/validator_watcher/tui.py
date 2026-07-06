@@ -563,9 +563,12 @@ class MainScreen(Screen):
     def _build_table(self) -> None:
         table = self.query_one("#grid", DataTable)
         table.clear(columns=True)
-        table.add_column("Validator", key="validator")
+        table.add_column("Validator", key="validator", width=28)
+        # Version columns need enough width for strings like "4.1.0-beta.1 != 4.2.0"
+        # and pre-release tags like "0.909.0-rc.40001".
+        col_widths = {"sfdp_version": 26, "software_outdated": 26, "delinquent": 14}
         for name, label in _WATCHER_COLUMNS.items():
-            table.add_column(label, key=name)
+            table.add_column(label, key=name, width=col_widths.get(name, 20))
         for index, validator in enumerate(self.app.config["validators"]):
             name = (
                 validator.get("name")
@@ -715,7 +718,9 @@ class WatcherTUI(App):
     .col-name { width: 1fr; }
     .watch-row .col-name { padding: 1 1 0 0; }
     .col-cool { width: 18; }
-    DataTable { height: 1fr; margin: 0 1; }
+    DataTable { height: 1fr; margin: 1 1 0 1; }
+    DataTable > .datatable--header { text-style: bold; }
+    DataTable > .datatable--cursor { background: $accent 30%; }
     .logpane {
         height: 14;
         border: round $surface-lighten-2;
