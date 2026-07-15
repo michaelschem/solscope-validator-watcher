@@ -24,6 +24,20 @@ def test_parse_version_strips_prefix_and_prerelease():
     assert app._parse_version("0.909.0-rc.40001") == (0, 909, 0)
 
 
+def test_version_key_orders_prereleases_per_semver():
+    key = app._version_key
+    # A pre-release sorts before its release.
+    assert key("4.2.0-beta.0") < key("4.2.0")
+    assert key("4.1.0-rc.1") < key("4.1.0")
+    # Higher core version always wins, pre-release or not.
+    assert key("4.1.0-rc.1") < key("4.2.0-beta.0")
+    # Numeric identifiers compare numerically.
+    assert key("4.1.0-rc.1") < key("4.1.0-rc.2")
+    assert key("0.1002.0-beta.40103") < key("0.1005.40100")
+    # Equal versions (with prefix/build metadata stripped) compare equal.
+    assert key("v4.2.0-beta.0") == key("4.2.0-beta.0+build.5")
+
+
 @pytest.mark.parametrize(
     "client_id, version, expected",
     [
@@ -192,7 +206,8 @@ def test_sfdp_agave_below_minimum_is_overdue(monkeypatch):
     monkeypatch.setattr(app, "_get_epoch_info", lambda url: _epoch_info(810))
     res = app._run_sfdp_version_watcher(_validator(), {})
     assert res.fired is True
-    assert res.message.startswith("SFDP:")  # distinguishable from software_outdated
+    # Fire emoji + "SFDP:" prefix, distinguishable from software_outdated.
+    assert res.message.startswith("\U0001f525 SFDP:")
     assert "SFDP requires 2.1.0" in res.message
     assert "overdue" in res.message
     assert res.detail == "2.0.0 != 2.1.0"  # shown in the dashboard grid
@@ -213,6 +228,7 @@ def test_sfdp_future_deadline_reports_hours_left(monkeypatch):
     )
     res = app._run_sfdp_version_watcher(_validator(), {})
     assert res.fired is True
+    assert res.message.startswith("\U0001f525 SFDP:")
     assert "SFDP will require 2.2.0 starting epoch 812" in res.message
     assert "about 72 hours left to update" in res.message
     assert res.detail == "2.1.0 != 2.2.0"
@@ -228,6 +244,60 @@ def test_sfdp_agave_at_or_above_minimum_ok(monkeypatch):
     res = app._run_sfdp_version_watcher(_validator(), {})
     assert res.fired is False
     assert res.detail == "2.2.0"  # version shown once when healthy
+
+
+def test_sfdp_queries_the_validators_cluster(monkeypatch):
+    """A testnet validator must be checked against the testnet requirements,
+    even when the config still carries the legacy mainnet-hardcoded api_url
+    that older versions wrote into every validator."""
+    seen_urls: list[str] = []
+
+    def fake_requirements(url):
+        seen_urls.append(url)
+        return _sfdp_requirements((800, "2.1.0", "0.900.0"))
+
+    monkeypatch.setattr(app, "_get_sfdp_requirements", fake_requirements)
+    monkeypatch.setattr(app, "_get_cluster_node_info", lambda url, ident: ("2.2.0", "Agave"))
+
+    # Default (no api_url) -> derived from cluster.
+    app._run_sfdp_version_watcher(_validator(cluster="testnet"), {})
+    # Legacy mainnet URL saved in the config -> treated as unset, not an override.
+    app._run_sfdp_version_watcher(
+        _validator(
+            cluster="testnet",
+            watchers={"sfdp_version": {"api_url": app.SFDP_REQUIRED_VERSIONS_API}},
+        ),
+        {},
+    )
+    # A genuinely custom URL is honored.
+    app._run_sfdp_version_watcher(
+        _validator(
+            cluster="testnet",
+            watchers={"sfdp_version": {"api_url": "https://example.com/versions"}},
+        ),
+        {},
+    )
+    assert seen_urls == [
+        app.sfdp_required_versions_api("testnet"),
+        app.sfdp_required_versions_api("testnet"),
+        "https://example.com/versions",
+    ]
+
+
+def test_sfdp_prerelease_is_below_the_final_release(monkeypatch):
+    """4.1.0-rc.1 does not satisfy a 4.1.0 minimum (pre-release-aware compare)."""
+    monkeypatch.setattr(
+        app,
+        "_get_sfdp_requirements",
+        lambda url: _sfdp_requirements((800, "4.1.0", None)),
+    )
+    monkeypatch.setattr(
+        app, "_get_cluster_node_info", lambda url, ident: ("4.1.0-rc.1", "Agave")
+    )
+    monkeypatch.setattr(app, "_get_epoch_info", lambda url: _epoch_info(810))
+    res = app._run_sfdp_version_watcher(_validator(), {})
+    assert res.fired is True
+    assert res.detail == "4.1.0-rc.1 != 4.1.0"
 
 
 def test_sfdp_firedancer_compared_against_firedancer_minimum(monkeypatch):

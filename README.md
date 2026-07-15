@@ -25,7 +25,7 @@ their cooldowns, and notification channels:
 
 | Watcher | What it checks |
 |---|---|
-| `sfdp_version` | Your node's version against the SFDP **required** minimum from `api.solana.org`. Detects whether the node runs Agave or **Firedancer** (by its version line) and compares against that client's minimum (`agave_min_version` or `firedancer_min_version`). |
+| `sfdp_version` | Your node's version against the SFDP **required** minimum from `api.solana.org` **for the validator's cluster** (mainnet-beta and testnet publish different minimums). Detects whether the node runs Agave or **Firedancer** (by its version line) and compares against that client's minimum (`agave_min_version` or `firedancer_min_version`). Pre-release tags are compared too (`4.2.0-beta.0` counts as below `4.2.0`). |
 | `software_outdated` | Your node's version against the **latest stable** Agave release on GitHub (`anza-xyz/agave`) within your node's current major version line (e.g. a `v3.1.x` node is compared to the newest `v3.x.y`). |
 | `delinquent` | Whether your vote account is reported delinquent via `getVoteAccounts`. |
 

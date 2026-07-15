@@ -564,9 +564,9 @@ class MainScreen(Screen):
         table = self.query_one("#grid", DataTable)
         table.clear(columns=True)
         table.add_column("Validator", key="validator", width=28)
-        # Version columns need enough width for strings like "4.1.0-beta.1 != 4.2.0"
-        # and pre-release tags like "0.909.0-rc.40001".
-        col_widths = {"sfdp_version": 26, "software_outdated": 26, "delinquent": 14}
+        # Version columns need enough width for strings like
+        # "4.1.0-rc.1 != 4.2.0-beta.0" and tags like "0.909.0-rc.40001".
+        col_widths = {"sfdp_version": 28, "software_outdated": 28, "delinquent": 14}
         for name, label in _WATCHER_COLUMNS.items():
             table.add_column(label, key=name, width=col_widths.get(name, 20))
         for index, validator in enumerate(self.app.config["validators"]):

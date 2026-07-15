@@ -14,10 +14,18 @@ import requests
 from twilio.rest import Client
 
 
-SFDP_REQUIRED_VERSIONS_API = (
-    "https://api.solana.org/api/community/v1/"
-    "sfdp_required_versions?cluster=mainnet-beta"
-)
+_SFDP_API_BASE = "https://api.solana.org/api/community/v1/sfdp_required_versions"
+
+# Legacy default that hardcoded mainnet-beta. Older versions stamped this URL
+# into every validator's saved config regardless of cluster, so configs that
+# still carry it are treated as "use the validator's cluster" rather than as a
+# deliberate override.
+SFDP_REQUIRED_VERSIONS_API = f"{_SFDP_API_BASE}?cluster=mainnet-beta"
+
+
+def sfdp_required_versions_api(cluster: str) -> str:
+    """SFDP required-versions API URL for the given cluster."""
+    return f"{_SFDP_API_BASE}?cluster={cluster}"
 
 AGAVE_RELEASES_API = "https://api.github.com/repos/anza-xyz/agave/releases"
 
@@ -35,6 +43,27 @@ def _parse_version(version: str) -> tuple[int, int, int]:
     semver = cleaned.split("-")[0]
     major, minor, patch = semver.split(".")
     return int(major), int(minor), int(patch)
+
+
+def _version_key(version: str) -> tuple:
+    """Comparable key implementing semver precedence, including pre-releases.
+
+    Unlike ``_parse_version`` (which drops the pre-release tag), this keeps it,
+    so ``4.2.0-beta.0 < 4.2.0`` and ``4.1.0-rc.1 < 4.1.0-rc.2``. Per semver,
+    numeric pre-release identifiers compare numerically and sort before
+    alphanumeric ones; build metadata (``+...``) is ignored.
+    """
+    cleaned = version.strip().lstrip("v").split("+")[0]
+    core, _, prerelease = cleaned.partition("-")
+    major, minor, patch = (int(part) for part in core.split("."))
+    if not prerelease:
+        # A release sorts after every pre-release of the same core version.
+        return (major, minor, patch, (1,))
+    identifiers = tuple(
+        (0, int(ident), "") if ident.isdigit() else (1, 0, ident)
+        for ident in prerelease.split(".")
+    )
+    return (major, minor, patch, (0, identifiers))
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -66,7 +95,8 @@ def default_watchers() -> dict[str, Any]:
     return {
         "sfdp_version": {
             "enabled": True,
-            "api_url": SFDP_REQUIRED_VERSIONS_API,
+            # No api_url default: the watcher derives it from the validator's
+            # cluster. Set api_url explicitly to override.
             "cooldown_minutes": 360,
         },
         "software_outdated": {
@@ -453,9 +483,13 @@ def _run_sfdp_version_watcher(
     name = _validator_name(validator)
     short_id = _short_pubkey(identity)
     rpc_url = resolve_rpc_url(validator)
-    requirements = _get_sfdp_requirements(
-        watcher_cfg.get("api_url", SFDP_REQUIRED_VERSIONS_API)
-    )
+    # Requirements differ per cluster, so derive the API URL from the
+    # validator's cluster. The legacy mainnet-hardcoded URL that older versions
+    # wrote into every config is treated as unset, not as an override.
+    api_url = watcher_cfg.get("api_url")
+    if not api_url or api_url == SFDP_REQUIRED_VERSIONS_API:
+        api_url = sfdp_required_versions_api(cluster)
+    requirements = _get_sfdp_requirements(api_url)
     validator_version, client_id = _get_cluster_node_info(rpc_url, identity)
     if validator_version is None:
         return WatchResult(
@@ -476,11 +510,13 @@ def _run_sfdp_version_watcher(
     # above the minimum passes regardless of the specific Agave/Jito variant.
     # The API publishes one minimum per epoch; find the earliest epoch whose
     # minimum this node does not meet — that epoch is the upgrade deadline.
+    # Pre-release tags participate in the comparison (4.2.0-beta.0 < 4.2.0).
     client_key = "firedancer" if client == "firedancer" else "agave"
+    validator_key = _version_key(validator_version)
     failing_entry = None
     for entry in requirements:
         required = entry[client_key]
-        if required and validator_parts < _parse_version(required):
+        if required and validator_key < _version_key(required):
             failing_entry = entry
             break
     if failing_entry is None:
@@ -494,16 +530,18 @@ def _run_sfdp_version_watcher(
 
     if deadline_epoch <= current_epoch:
         message = (
-            f"SFDP: validator {name} ({short_id}) is below the SFDP required "
-            f"minimum version. Current: {validator_version} ({client_display}). "
+            f"\U0001f525 SFDP: validator {name} ({short_id}) is below the SFDP "
+            f"required minimum version. "
+            f"Current: {validator_version} ({client_display}). "
             f"SFDP requires {required_label} as of epoch {deadline_epoch} "
             f"(current epoch is {current_epoch}) — the update is overdue."
         )
     else:
         days_left = _estimate_days_until_epoch(epoch_info, deadline_epoch)
         message = (
-            f"SFDP: validator {name} ({short_id}) needs an update to stay SFDP "
-            f"compliant. Current: {validator_version} ({client_display}). "
+            f"\U0001f525 SFDP: validator {name} ({short_id}) needs an update to "
+            f"stay SFDP compliant. "
+            f"Current: {validator_version} ({client_display}). "
             f"SFDP will require {required_label} starting epoch {deadline_epoch} "
             f"— about {_format_hours_left(days_left)} left to update."
         )
@@ -585,8 +623,8 @@ def _run_software_outdated_watcher(
     if latest_version is None:
         return WatchResult(False, watcher_name, detail=validator_version)
 
-    latest_parts = _parse_version(latest_version)
-    if validator_parts >= latest_parts:
+    # Pre-release-aware: a node on 4.1.0-rc.1 is behind the 4.1.0 release.
+    if _version_key(validator_version) >= _version_key(latest_version):
         return WatchResult(False, watcher_name, detail=validator_version)
 
     message = (

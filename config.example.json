@@ -9,7 +9,6 @@
       "watchers": {
         "sfdp_version": {
           "enabled": true,
-          "api_url": "https://api.solana.org/api/community/v1/sfdp_required_versions?cluster=mainnet-beta",
           "cooldown_minutes": 360
         },
         "software_outdated": {
